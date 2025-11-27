@@ -45,7 +45,7 @@ interface APB_intf (input logic clk);
         property enable_ch;
             @(posedge clk) $rose(PSEL1) |=> PENABLE;
         endproperty
-    
+
         // to check whether all signal are stable or not during the PENABLE assertion in the SETUP state
         // in the same clock cycle
         property stable_ch;
@@ -103,9 +103,6 @@ class agent_config extends uvm_object;
 
     // active
     uvm_active_passive_enum active = UVM_ACTIVE;
-
-    // has_fun_cov
-    bit has_fun_cov = 1;
     
     function new(string name = "agent_config");
         super.new(name);
@@ -271,7 +268,7 @@ class fun_cov extends uvm_subscriber#(transaction);
             bins pready = {1};
             illegal_bins il_pready= {0};
         }
-        PRDATA: coverpoint _tempRDATA { 
+        PRDATA: coverpoint _tempRDATA {
             bins prdata[16] = {[0:32'hffffffff]};
         }
         PSLVERR: coverpoint trans.PSLVERR { 
@@ -633,11 +630,13 @@ class scoreboard extends uvm_scoreboard;
         if(act_trans.compare(exp_trans)) begin
             `uvm_info("SCB", $sformatf("%s\nStatus -> TEST___PASSED", act_trans.convert2string()), UVM_NONE)
             passCnt++;
+            `uvm_info("SCB",$sformatf("pass count value : %0d",passCnt),UVM_NONE)
         end
         else begin
             `uvm_error("SCB", $sformatf("Actual Packet: %s\nExpected Packet: %s\nStatus -> TEST__FAILED", 
                     act_trans.convert2string(), exp_trans.convert2string()))
             failCnt++;
+            `uvm_info("SCB",$sformatf("fail count value : %0d",failCnt),UVM_NONE)
         end
     endfunction
 
@@ -699,13 +698,13 @@ class agent extends uvm_agent;
         `uvm_fatal(get_name(), "agnt_cfg cannot be found in ConfigDB!")
         
         mon = monitor::type_id::create("mon", this);
+        fc = fun_cov::type_id::create("fc", this);
+
         if(agnt_cfg.active) begin
             drv = driver::type_id::create("drv", this);
             seqr = uvm_sequencer#(transaction)::type_id::create("seqr", this);
         end
-        
-        if(agnt_cfg.has_fun_cov)
-            fc = fun_cov::type_id::create("fc", this);
+
     endfunction: build_phase
     // extern function void build_phase(uvm_phase phase);
     
@@ -721,8 +720,8 @@ class agent extends uvm_agent;
             drv.drv_intf = agnt_cfg.intf;
         end
 
-        if(agnt_cfg.has_fun_cov)
-            mon.ap.connect(fc.analysis_export);
+        mon.ap.connect(fc.analysis_export);
+
     endfunction: connect_phase
     // extern function void connect_phase(uvm_phase phase);
     
@@ -815,7 +814,7 @@ endclass //base_test extends uvm_test
 // `include "apb_mem.sv"
 
 module top;
-    bit clk;
+    bit clk = 0;
 
     APB_intf intf(clk);
 
@@ -833,6 +832,9 @@ module top;
     initial begin
         $dumpfile("dump.vcd");
         $dumpvars;
+        $assertvacuousoff(0);
+      	#950;
+        $finish();
     end
 
 endmodule

@@ -1,0 +1,109 @@
+WhY APB?
+
+-- Low cost
+-- Low power
+-- Low complexity
+-- Low bandwidth
+-- Non- pipelined
+-- Ideal for peripherals
+-- Single Master/Multiple SLaves
+-- Multiple Master/Multiple SLaves
+
+
+REAL LIFE APPLICATIONS > Zynq RF SoC
+
+I/O Model in which the same address bus/space os used to 
+    - Do memory access (eg to RAM)
+    - Do I/O operation (eg to I/O pins or peripheral registers)
+
+READING AND WRITING MEMORY ADDRESSES ALLOW US to
+    - rEAD PERIPHERAL STATE (EG A VALUE OF AN io pIN OR fsm DFF)
+    - iSSUE PERIPHERAL COMMANDS (EG SET AN i/o PIN or FSM's state)
+
+How?
+    -Memory has an address and VALUE
+    - can equate a pointer to desired address
+    - can set/get de-referenced value to cahngee memory
+    - can control peripheral state in this way
+
+APB Singal definition
+
+Signal Name                         Description                                     Per slave                       Source
+
+PCLK                The bus clock source (rising-edge triggered)                        No                          System
+PRESETn             The bus (and typically system) reset signal (active low)            No                          System
+PADDR               The APB address bus (can be up to 32-bits wide)                     No                          Master
+PSELX               The select line for each slave device                               Yes                         Master
+PENABLE             Indicates the 2nd and subsequent cycles of an APB xfer              No                          Master
+PWRITE              indicates transfer direction (Write=H, Read=L)                      No                           Master
+PWDATA              The write data bus (can be up to 32-bits wide)                      No                          Master
+PREADY              Used to extend a transfer                                           Yes                         Slave
+PRDATA              The read data bus (can be up to 32-bits wide)                       Yes                         Slave
+PSLVERR             Indicates a transfer error (OKAY=L, ERROR=H f)                      Yes                         Slave
+PSTRB               Write strobe, indicates which byte lane to be                       No                          Master
+                    updated during a write transfer. 1 for each 8 bits
+PPROT               Protection type. This signal indicated the normal,                  No                          Master
+                    Priviledged, or secure protection level of the transaction
+                    and whether the transaction is a data access or instruction
+                    access
+
+
+APB3 supports 16 slaves
+Signals from MASTER to APB SLAVE
+
+    - PSTRB , PA [31:0] , PWDATA [31:0] , PWRITE 
+    - PSEL (This is little different because it comes as a single signal and uses the UPPER 4 bits of the "PA[31:0]" to decode to 16 combinations from PSEL0 through PSEL15 that can go to slave)
+    
+Signals from SLAVE to MASTER
+
+    - from APB slaves we will have 16 input bits for following Signals
+        - PRDATA0 ----- PRDATA15
+        - PREADT0 ----- PREADY15
+        - PSLVERR0 ----- PSLVERR15
+    - Then the PSEL signal performs the decoding for the above signals and sends out PRDATA, PREADY and PSLVERR to the APB_master
+
+-----------------
+STATE MACHINE
+-----------------
+
+STATE MACHINE DESIGN (applicable for Master and Slave will lag by 1 clock cycle)
+-- Check next slide for the diagram of state machine  - Write transfer
+
+    IDLE 
+    - Default APB state (PSELx = 0, PENABLE = 0)
+        if (transfer) = SETUP state
+
+    SETUP
+    - PSELx = 1, PENABLE = 0
+    - When transfer is required
+    - PSELx is asserted
+    - Will just take one clock cycle
+    - This state will mostly set all the control signals like  PWRITE = 1, PSEL = 1, put some data on PWDATA bus
+    - If PSELx = 1, then PADDR , PWRITE, PWDATA must be VALID.
+    - Move to ACCESS state without any eXTERNAL trigger.
+
+(During the transition from SETUP to ACCESS, we must have PADDR, PWRITE, PWDATA with stable values and they should not change)
+
+    ACCESS
+    - PENABLE = 1 (the master here is ready for doing the transaction, and waits on the PREADY input to be High from the Slave)
+    - Addr, write, select and write data remain stable
+    - Stay if PREADY = 0
+    - Goto IDLE if PREADY = 1 and No more data is there.
+    - Goto SETUP if PREADY = 1 and more data is there.
+    
+
+
+----------------------------------------------
+Why APB takes so many clocks for transfer
+----------------------------------------------
+
+- when the transfer begins from IDLE, it takes 3 clocks to complete without any backpressure from Slave
+- When there are back to back transfers it still takes 2 clocks to complete without any backpressure from slave.
+- APB is mainly target to supporting very simple interfaces with SRAM type timing where you have 2 step access
+        . Address and control in the first clock
+        . Data transfer in the second clock
+
+- if we do it in Single clock - then the steps are implemented results in lot of combinational logic
+- 2 Cycle timing give simplest minimum logic that is easy to constrain and synthesize
+- Although control information is captured during setup phase still maintained in access phase because APB is not pipelined bus so there is no reason to change
+

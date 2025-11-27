@@ -1,0 +1,3 @@
+APB is for low performance devices
+It is not pipelined.
+It is a Low cost, and mainly used for minimal power consumption.

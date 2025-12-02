@@ -36,7 +36,19 @@ interface APB_intf (input logic clk);
             input #1 PRDATA, PREADY, PSLVERR;   
         endclocking
     
+        // WHY TO USE the MODPORT
+        // Without a clocking block, if the Driver drives a signal at the exact same picosecond that the Clock rises, we get a Race Condition.
+        // The DUT might see the old value or the new value, leading to unpredictable bugs.
+
+        //  By using modport, SystemVerilog automatically handles:
+            
+        // 1. Input Skew: It samples inputs (like PREADY) slightly before the clock edge (stable value).
+            
+        // 2. Output Skew: It drives outputs (like PSEL) slightly after the clock edge (hold time).
+        
+        // anything connecting to the DRV modport must access signals exclusively through the "drv_cb" clocking block. 
         modport DRV (clocking drv_cb);
+        // anything connecting to the MON modport must access signals exclusively through the "mon_cb" clocking block.
         modport MON (clocking mon_cb);
 
 		//-------------------------- Assertions  -------------------------------
@@ -149,7 +161,9 @@ class transaction extends uvm_sequence_item;
         }
         PWDATA.size() == PADDR.size();
     }
-    constraint reset_dist { PRESETn dist {0:=1, 1:=200}; }
+    constraint reset_dist { 
+        PRESETn dist {1:=200};
+    }
     constraint sel_dist { PSEL1 dist {0:=10, 1:=90}; }
     constraint err_case_dist { error_case dist {1:=5, 0:=100}; } // Generates error test cases
 
@@ -160,22 +174,19 @@ class transaction extends uvm_sequence_item;
                 PADDR[i] inside {[0:(2**5)-1]};
     }
 
-    //  Group: Functions
+    // Functions
+    /// this tells us the number of test packets we are dealing with
     function void pre_randomize();
         p_id++;
     endfunction
 
+    // this tells us the type of check we are doing with the current packet
     function void post_randomize();
-        if(!PRESETn)
-            f_id = 5;
-        else if (PWRITE && PADDR.size() == 1)
-            f_id = 1;
-        else if (PWRITE && PADDR.size() > 1)
-            f_id = 2;
-        else if (!PWRITE && PADDR.size() == 1)
-            f_id = 3;
-        else if (!PWRITE && PADDR.size() > 1)
-            f_id = 4;
+        if(!PRESETn) f_id = 5;
+        else if (PWRITE && PADDR.size() == 1)  f_id = 1;
+        else if (PWRITE && PADDR.size() > 1)   f_id = 2;
+        else if (!PWRITE && PADDR.size() == 1)   f_id = 3;
+        else if (!PWRITE && PADDR.size() > 1)   f_id = 4;
     endfunction
 
     // Increases the size of the dynamic array. Helper function for IP/OP monitor which needs to
@@ -186,6 +197,7 @@ class transaction extends uvm_sequence_item;
             PWDATA = new[1];
         else
             PWDATA = new[PWDATA.size()+1] (PWDATA);
+       
         if(PADDR.size() == 0)
             PADDR = new[1];
         else
@@ -197,29 +209,7 @@ class transaction extends uvm_sequence_item;
         super.new(name);
     endfunction: new
 
-    /// functions , may use
-
-    //  do_compare
-    virtual function bit do_compare(uvm_object rhs, uvm_comparer comparer);
-        transaction rhs_;
-
-        if (!$cast(rhs_, rhs)) begin
-            `uvm_fatal({this.get_name(), ".do_compare()"}, "Cast failed!");
-        end
-
-        do_compare = super.do_compare(rhs, comparer);
-
-        //  list of local props to be compared
-        do_compare &= (
-            this.PSLVERR == rhs_.PSLVERR &&
-            this.PREADY == rhs_.PREADY
-        );
-        foreach ( PRDATA[i] ) begin
-            do_compare &= (this.PRDATA[i] == rhs_.PRDATA[i]);
-        end
-
-    // return do_compare;
-    endfunction: do_compare
+    /// functions , may use at some stage
 
     //  convert2string
     virtual function string convert2string();
@@ -227,9 +217,9 @@ class transaction extends uvm_sequence_item;
         s = super.convert2string();
 
         /*  list of local properties to be printed:  */
-        s = {s, $sformatf("Packet ID: %0d, Feature ID: %0d\n", p_id, f_id)};
-        s = {s, $sformatf("Input to DUT: PWRITE = %b, PRESETn = %b, PSEL1 = %b, PWDATA = %p, PADDR = %p\n", PWRITE, PRESETn, PSEL1, PWDATA, PADDR)};
-        s = {s, $sformatf("OUPUT from DUT: PREADY = %b, PRDATA = %p, PSLVERR = %b", PREADY, PRDATA, PSLVERR)};
+        s = {s, $sformatf("Time : %0t, Packet ID: %0d, Feature ID: %0d\n",$realtime, p_id, f_id)};
+        s = {s, $sformatf("Time : %0t, Input to DUT: PWRITE = %b, PRESETn = %b, PSEL1 = %b, PWDATA = %p, PADDR = %p\n",$realtime, PWRITE, PRESETn, PSEL1, PWDATA, PADDR)};
+        s = {s, $sformatf("Time : %0t, OUPUT from DUT: PREADY = %b, PRDATA = %p, PSLVERR = %b",$realtime, PREADY, PRDATA, PSLVERR)};
 
         return s;
     endfunction: convert2string
@@ -355,7 +345,7 @@ class rnd_sequence extends uvm_sequence;
 
     //  Task: body
     //  This is the user-defined task where the main sequence code resides.
-    // extern virtual task body();
+    //  extern virtual task body();
     virtual task body();
         `uvm_info("rnd_sequence","rnd_sequence block got executed",UVM_NONE);
         for (int i = 0; i < no_of_testcases-1; i++) begin
@@ -813,7 +803,7 @@ endclass //base_test extends uvm_test
 // `include "package.svh"
 // `include "apb_mem.sv"
 
-module top;
+module full_tb;
     bit clk = 0;
 
     APB_intf intf(clk);
@@ -833,7 +823,7 @@ module top;
         $dumpfile("dump.vcd");
         $dumpvars;
         $assertvacuousoff(0);
-      	#950;
+      	#1350;
         $finish();
     end
 

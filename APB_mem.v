@@ -26,7 +26,7 @@ module apb_mem #(parameter DEPTH = 5) (
         
         if(!PRESETn) begin
             state <= IDLE;
-            foreach(mem[i]) mem[i] = 32'hffffffff;
+            foreach(mem[i]) mem[i] = 32'($unsigned(i));
         end
         else
             state <= next_state;
@@ -63,9 +63,9 @@ module apb_mem #(parameter DEPTH = 5) (
                     else if(!PWRITE) begin
                         PRDATA = mem[PADDR[DEPTH-1:0]];
                         if(mem[PADDR[DEPTH-1:0]] == 32'hffffffff) begin
-                            $display("PADDR is %h and content is %h", PADDR, mem[PADDR[DEPTH-1:0]]);
+                            $display("FSM_MSG SETUP_DESIGN. PADDR is %d and content is %h", PADDR, mem[PADDR[DEPTH-1:0]]);
                             PSLVERR = 1;
-                            $error("Reading data from unwritten address");
+                            $error("FSM_MSG SETUP_DESIGN. Reading data from unwritten address");
                         end
 
                     end

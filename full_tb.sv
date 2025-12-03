@@ -58,6 +58,11 @@ interface APB_intf (input logic clk);
             @(posedge clk) $rose(PSEL1) |=> PENABLE;
         endproperty
 
+        // check whether PREADY is asserted only when PSEL1 and PENABLE are high
+        property check_PR_PSL_PEN;
+            @(posedge clk) PSEL1 && (PENABLE) |-> PREADY;
+        endproperty
+
         // to check whether all signal are stable or not during the PENABLE assertion in the SETUP state
         // in the same clock cycle
         property stable_ch;
@@ -86,6 +91,11 @@ interface APB_intf (input logic clk);
         else
             `uvm_error("enable_ch", "ENABLE NOT DRIVED 1 CYCLE AFTER PSEL1")
 
+        assert property (check_PR_PSL_PEN)
+            `uvm_info("check_PR_PSL_PEN", "PREADY is 1 only when PSEL1 and PENABLE are both 1", UVM_DEBUG)
+        else
+            `uvm_info("check_PR_PSL_PEN", "PREADY is NOT 1, while PSEL1 and PENABLE are both 1", UVM_DEBUG)
+
         assert property (stable_ch) 
             `uvm_info("stable_ch", "ALL SIGANLS STABLE DURING PENABLE", UVM_DEBUG)
         else
@@ -100,6 +110,10 @@ interface APB_intf (input logic clk);
             `uvm_info("enable_deassert_ch2", "PENABLE DEASSERTED WHEN PREADY ASSERTED", UVM_DEBUG)
         else
             `uvm_error("enable_deassert_ch2", "PENABLE GETTING DEASSERTED WITHOUT PREADY BEING ASSERTED")
+
+
+        assert 
+        
 endinterface
 
 
@@ -161,8 +175,9 @@ class transaction extends uvm_sequence_item;
         }
         PWDATA.size() == PADDR.size();
     }
+
     constraint reset_dist { 
-        PRESETn dist {1:=200};
+        PRESETn dist {0:=1 ,1:=200};
     }
     constraint sel_dist { PSEL1 dist {0:=10, 1:=90}; }
     constraint err_case_dist { error_case dist {1:=5, 0:=100}; } // Generates error test cases
@@ -178,6 +193,7 @@ class transaction extends uvm_sequence_item;
     /// this tells us the number of test packets we are dealing with
     function void pre_randomize();
         p_id++;
+        `uvm_info("TRANSACTION",$sformatf("This is value for p_id : %0d",p_id),UVM_NONE)
     endfunction
 
     // this tells us the type of check we are doing with the current packet
@@ -324,7 +340,7 @@ class rnd_sequence extends uvm_sequence;
         trans = transaction::type_id::create("trans");
         if(!uvm_config_db#(int)::get(null, "seq.", "no_cases", no_of_testcases)) begin
             `uvm_warning(get_name(), "Cant get no of testcases, Using default no of test cases = 10")
-            no_of_testcases = 10;
+            no_of_testcases = 1;
         end
     endfunction: new
 

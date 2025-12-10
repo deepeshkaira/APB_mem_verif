@@ -47,7 +47,9 @@ module apb_mem_NL #(parameter DEPTH = 5) (
 				SETUP:begin
 					if(PENABLE) begin
 						PREADY_reg <= 1;
-						if((PADDR[DEPTH+1:2] >= 2**DEPTH))
+// This is actually correct value check for PSLVERR because APB memory is byte addressable. (go through the concept whenevr confused)
+						// if((PADDR[DEPTH+1:2] >= 2**DEPTH))
+                        if ( (PADDR >> 2) >= 2**DEPTH )
                             // can include this condition as well to pull up the pslverr high
                             // || ((!PWRITE) && mem[PADDR[DEPTH-1:0]] == 32'hffffffff))
 							PSLVERR_reg <= 1;

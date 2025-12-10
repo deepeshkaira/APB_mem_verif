@@ -1,3 +1,4 @@
+`timescale 1ns/1ns
 `include "uvm_macros.svh"
 import uvm_pkg::*;
 
@@ -82,6 +83,10 @@ interface APB_intf (input logic clk);
             (s1 and $rose(PREADY)) |=> $fell(PENABLE);
         endproperty
         
+
+
+
+
 
         // Property to check whether the PENABLE is deasserted without PREADY being asserted. Also, added to skip the first check after reset.
         // since, PREADY will never be high in the past when simulation has just started, adding and checking PENABLE was 1 anytime when PREADY, makes sense
@@ -179,22 +184,6 @@ class transaction extends uvm_sequence_item;
         PWDATA.size() == PADDR.size();
     }
 
-    // Ensure addresses are 32-bit aligned (Byte Addressing)
-    constraint align_addr {
-        foreach(PADDR[i]) {
-            PADDR[i] % 4 == 0; 
-        }
-    }
- 
-    // If DEPTH=5 then we have 32 words. Max Byte Address = 31*4 = 124
-    constraint paddr_val {
-        !error_case -> 
-            foreach(PADDR[i]) 
-                PADDR[i] inside {[0 : (2**5)*4 - 4]};
-            // to check whether the design is going to write on to the memory locations
-                    // PADDR[i] inside {[0 : (2**5)*5]};
-    }
-
     constraint reset_dist { 
         PRESETn dist {0:=1 ,1:=200};
     }
@@ -202,11 +191,11 @@ class transaction extends uvm_sequence_item;
     constraint err_case_dist { error_case dist {1:=5, 0:=100}; } // Generates error test cases
 
     // Constraint for a specific memory size, can be commented for general use
-    // constraint paddr_val {
-    //     !error_case -> 
-    //         foreach(PADDR[i]) 
-    //             PADDR[i] inside {[0:(2**5)-1]};
-    // }
+    constraint paddr_val {
+        !error_case -> 
+            foreach(PADDR[i]) 
+                PADDR[i] inside {[0:(2**5)-1]};
+    }
 
     //  Constructor: new
     function new(string name = "transaction");
@@ -304,22 +293,12 @@ class fun_cov extends uvm_subscriber#(transaction);
         PSLVERR: coverpoint trans.PSLVERR { 
             bins pslverr[] = {0, 1}; 
         }
-        PWRITE_TRANS: coverpoint trans.PWRITE{  // to check the transition coverage
-            bins write_to_read = (1 => 0);
-            bins read_to_write = (0 => 1);
-        }
-        PADDR_CORNERS: coverpoint _tempPADDR {
-            bins low = {0};
-            bins high = {32'h0000007C}; // Max byte address for Depth 5 (31*4)
-            bins others = default;
-        }
         PSEL1xPWRITE: cross PSEL1, PWRITE {
             ignore_bins ig_bins = binsof(PSEL1) intersect{0}; 
         }
         PSEL1xPWRITExPADDR: cross PSEL1, PWRITE, PADDR { 
             ignore_bins ig_bins = binsof(PSEL1) intersect{0}; 
         }
-
     endgroup
 
     /* Function for sampling data for coverage
@@ -419,84 +398,6 @@ class rnd_sequence extends uvm_sequence;
 endclass: rnd_sequence
 
 
-///////// apb_write_sequence
-///////////////////////////////////////
-
-class apb_write_seq extends rnd_sequence;
-    `uvm_object_utils(apb_write_seq)
-
-    function new(string name="apb_write_seq");
-        super.new(name);
-    endfunction
-
-    virtual task body();
-        `uvm_info(get_name(), "STARTING WRITE SEQUENCE", UVM_NONE)
-        repeat(no_of_testcases) begin
-            start_item(trans);
-            // Constraint: FORCE PWRITE to 1
-            assert(trans.randomize() with { 
-                PWRITE == 1; 
-                PRESETn == 1; 
-                // Optional: Constrain array size for single transfers
-                PADDR.size() == 1; 
-            });
-            finish_item(trans);
-        end
-    endtask
-endclass
-
-///////////////////////////////////////
-///   apb_read_only_sequence
-//////////////////////////////////////
-
-class apb_read_seq extends rnd_sequence;
-    `uvm_object_utils(apb_read_seq)
-
-    function new(string name="apb_read_seq");
-        super.new(name);
-    endfunction
-
-    virtual task body();
-        `uvm_info(get_name(), "STARTING READ SEQUENCE", UVM_NONE)
-        repeat(no_of_testcases) begin
-            start_item(trans);
-            //FORCE PWRITE to 0
-            assert(trans.randomize() with { 
-                PWRITE == 0; 
-                PRESETn == 1;
-                PADDR.size() == 1;
-            });
-            finish_item(trans);
-        end
-    endtask
-endclass
-
-/////////////////////////////////////////
-////////////  simultaneous read / write sequence
-////////////////////////////////////////
-
-class apb_write_read_seq extends rnd_sequence;
-    `uvm_object_utils(apb_write_read_seq)
-
-    function new(string name="apb_write_read_seq");
-        super.new(name);
-    endfunction
-
-    virtual task body();
-        `uvm_info(get_name(), "STARTING INTERLEAVED SEQ", UVM_NONE)
-        repeat(no_of_testcases) begin
-            start_item(trans);
-            // Allow PWRITE to be 0 or 1 randomly
-            assert(trans.randomize() with { 
-                PRESETn == 1;
-                PADDR.size() == 1; 
-            });
-            finish_item(trans);
-        end
-    endtask
-endclass
-
-
 ///////////////////////////////////////
 //////////// MY DRIVER /////////////
 ///////////////////////////////////////	
@@ -554,35 +455,41 @@ class driver extends uvm_driver#(transaction);
         // `uvm_info("DRV",$sformatf("ACCESS state of FSM. PSEL1 = %b and PENABLE = %b",drv_intf.drv_cb.PSEL1,drv_intf.drv_cb.PENABLE),UVM_NONE);
     endtask
 
-    task drive_transfer(int index);
-        // 1. SETUP PHASE
-    
-        drv_intf.drv_cb.PSEL1   <= 1;
-        drv_intf.drv_cb.PENABLE <= 0;
-        drv_intf.drv_cb.PWRITE  <= trans_drv.PWRITE;
-        drv_intf.drv_cb.PADDR   <= trans_drv.PADDR[index];
-        if (trans_drv.PWRITE)
-            drv_intf.drv_cb.PWDATA <= trans_drv.PWDATA[index];
-        
-        // one clock cycle for Setup Phase to complete
-        @(drv_intf.drv_cb);
+    /// run through all the states of FSM
+    task full_drive_all_states();
+        drv_intf.drv_cb.PSEL1 <= 1;
 
-        // 2. ACCESS PHASE
-        // no chaneg in PSEL value, and drive PENABLE high
+        @(drv_intf.drv_cb);
+        drv_intf.drv_cb.PSEL1 <= 1;
+	@(drv_intf.drv_cb);
         drv_intf.drv_cb.PENABLE <= 1;
-
-        // Wait for PREADY , This will also handle the wait states.
-        // wait at least one cycle as per protocol rules.
+        drv_intf.drv_cb.PRESETn <= trans_drv.PRESETn;
+        drv_intf.drv_cb.PWRITE  <= 1;
+        drv_intf.drv_cb.PWDATA  <= 0;
+        `uvm_info("DRV",$sformatf("SETUP DATA value now : %0h",trans_drv.PWDATA[i]),UVM_NONE);
+        drv_intf.drv_cb.PADDR   <= 0;
+        `uvm_info("DRV",$sformatf("SETUP ADDRESS value now : %0h",trans_drv.PADDR[i]),UVM_NONE);
         @(drv_intf.drv_cb);
-        while(drv_intf.drv_cb.PREADY === 0) begin
-            @(drv_intf.drv_cb);
-        end
+        drv_intf.drv_cb.PSEL1 <= 0;
+    endtask
 
-        // 3. IDLE
-        // ccan Drop Select and Enable as txn is finished
-        drv_intf.drv_cb.PSEL1   <= 0;
-        drv_intf.drv_cb.PENABLE <= 0;
-endtask
+	// // write to the apb memory
+    task only_write_to_memory();
+        drv_intf.drv_cb.PSEL1 <= 0;
+
+        @(drv_intf.drv_cb);
+        drv_intf.drv_cb.PSEL1 <= 1;
+        @(drv_intf.drv_cb);
+        drv_intf.drv_cb.PENABLE <= 1;
+        drv_intf.drv_cb.PRESETn <= trans_drv.PRESETn;
+        drv_intf.drv_cb.PWRITE  <= 1;
+            drv_intf.drv_cb.PWDATA  <= trans_drv.PWDATA[i];;
+            `uvm_info("DRV",$sformatf("SETUP DATA value now : %0h",trans_drv.PWDATA[i]),UVM_NONE);
+            drv_intf.drv_cb.PADDR   <=  trans_drv.PADDR[i];
+            `uvm_info("DRV",$sformatf("SETUP ADDRESS value now : %0h",trans_drv.PADDR[i]),UVM_NONE);
+        @(drv_intf.drv_cb);
+        drv_intf.drv_cb.PSEL1 <= 1;
+    endtask
 
     // drive task - Switches b/w different operating states
     task drive();
@@ -597,10 +504,13 @@ endtask
         else begin
             @(drv_intf.drv_cb);
             for(i=0; i<trans_drv.PADDR.size(); i++) begin
-                drive_transfer(i);
+                // full_drive_all_states();
+		only_write_to_memory();
                 // setup();
                 // @(drv_intf.drv_cb);
                 // access();
+                wait(drv_intf.drv_cb.PREADY == 1);
+                
             end
         end
         idle();
@@ -616,7 +526,10 @@ endtask
         `uvm_info("DRV",$sformatf("received item_done at time %0t",$realtime),UVM_NONE);
     end
     endtask: run_phase
-
+    
+    // extern function void build_phase(uvm_phase phase);
+    
+    // extern task run_phase(uvm_phase phase);
     
 endclass
 
@@ -719,26 +632,17 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
     const int ram_depth = 2**DEPTH;
     bit [31:0] ram_mem [];  // Memory for DEPTH defined
 
-    /// convert byte address to word index
-    bit [31:0] word_index;
-    
-
     // Function: get_ref_val()
     function transaction get_ref_val(transaction trans);
-
         if(trans.PRESETn == 0) begin
-            foreach (ram_mem[j]) ram_mem[j] = 32'hffffffff;
+            foreach (ram_mem[i]) ram_mem[i] = 32'hffffffff;
             trans.PSLVERR = 0;
             //trans.PRDATA[0] = 32'b0;
             trans.PREADY = 0;
             return trans;
         end
         for(int i=0; i<trans.PADDR.size(); i++) begin
-
-            word_index = trans.PADDR[i] >> 2; /// ignoring the last 2 bit values here given from the APB MASTER
-
-            // if(trans.PADDR[i] >= ram_depth) begin
-            if(word_index >= ram_depth) begin
+            if(trans.PADDR[i] >= ram_depth) begin
                 trans.PSLVERR = 1;
                 trans.PRDATA[i] = 32'b0;
                 trans.PREADY = 1;
@@ -752,7 +656,7 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
                     trans.PSLVERR = 1;
                     continue;
                 end
-                ram_mem [word_index] = trans.PWDATA[i];
+                ram_mem [trans.PADDR[i]] = trans.PWDATA[i];
                 trans.PRDATA[i] = 32'b0;
                 trans.PREADY = 1;
                 trans.PSLVERR = 0;
@@ -764,7 +668,7 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
                     trans.PSLVERR = 1;
                     continue;
                 end
-                trans.PRDATA[i] = ram_mem [word_index];
+                trans.PRDATA[i] = ram_mem [trans.PADDR[i]];
                 trans.PREADY = 1;
                 trans.PSLVERR = 0;
             end
@@ -897,6 +801,7 @@ class agent extends uvm_agent;
         mon.ap.connect(fc.analysis_export);
 
     endfunction : connect_phase
+    // extern function void connect_phase(uvm_phase phase);
     
 endclass
 
@@ -930,11 +835,11 @@ class environment extends uvm_env;
     endfunction: connect_phase
     
     
-endclass
+endclass //environment extends uvm_env
 
-////////////////////////////////
+///////////////////////////////////////
 //////////// MY TEST  //////////
-////////////////////////////////
+///////////////////////////////////////
 
 class base_test extends uvm_test;
     `uvm_component_utils(base_test)
@@ -943,7 +848,7 @@ class base_test extends uvm_test;
     environment env;
 
     // Variables
-    // rnd_sequence seq;
+    rnd_sequence seq;
     agent_config agnt_cfg;
 
     // Constructor: new
@@ -962,9 +867,9 @@ class base_test extends uvm_test;
         // setting here a handle so that classes inside agent can access the agent_config block from here.
         uvm_config_db#(agent_config)::set(this, "env.agnt.*", "agnt_cfg", agnt_cfg);
         /// set the number of cases for the design from the base_test
-        uvm_config_db#(int)::set(null, "seq.*", "no_cases", 50);
+        uvm_config_db#(int)::set(null, "seq.*", "no_cases", 5);
         
-        // seq = new();
+        seq = new();
         env = environment::type_id::create("env", this);
     endfunction: build_phase
 
@@ -973,101 +878,14 @@ class base_test extends uvm_test;
         uvm_top.print_topology();
     endfunction: end_of_elaboration_phase
     
-    // commenting out the run phase from here and will put in specific cases below
-    // task run_phase(uvm_phase phase);
-    //     phase.raise_objection(this);
-    //     seq.start(env.agnt.seqr);
-    //     #100;
-    //     phase.drop_objection(this);
-    // endtask: run_phase
+    task run_phase(uvm_phase phase);
+        phase.raise_objection(this);
+        seq.start(env.agnt.seqr);
+        #100;
+        phase.drop_objection(this);
+    endtask: run_phase
     
-endclass
-
-class apb_write_seq extends rnd_sequence;
-    `uvm_object_utils(apb_write_seq)
-
-    function new(string name="apb_write_seq");
-        super.new(name);
-    endfunction
-
-    virtual task body();
-        `uvm_info(get_name(), "--------------------------", UVM_LOW)
-        `uvm_info(get_name(), "Seq statr: apb_write_seq", UVM_LOW)
-        `uvm_info(get_name(), "-----------------------------", UVM_LOW)
-
-        // SYSTEM RESET
-        `uvm_info(get_name(), "[PHASE 1] Asserting Reset", UVM_MEDIUM)
-        start_item(trans);
-        if(!trans.randomize() with { 
-            PRESETn == 0; 
-            }) `uvm_fatal(get_name(), "Randomization Failed during Reset Phase")
-        finish_item(trans);
-
-
-        // RANDOM WRITE TRAFFIC
-        `uvm_info(get_name(), " Starting Random Write Bursts", UVM_MEDIUM)
-        
-        repeat(no_of_testcases) begin
-            start_item(trans);
-            
-            // applied minimal constraints here.
-            // the transaction class pick a random size between 1 and 10 as per 'constraint arr_size'.
-            // also, the PADDR.SIZE will be equal to PWDATA.SEIZE. 
-            if(!trans.randomize() with { 
-                PWRITE  == 1; 
-                PRESETn == 1; 
-            }) `uvm_fatal(get_name(), "Randomization Failed during Traffic Phase")
-            
-            `uvm_info(get_name(), $sformatf(" Write Burst Address with Size: %0d, Burst DATA with size : %0d ", trans.PADDR.size(), trans.PWDATA.size()), UVM_HIGH)
-            
-            finish_item(trans);
-        end
-
-        `uvm_info(get_name(), "----------------------", UVM_LOW)
-        `uvm_info(get_name(), "Seq Done: apb_write_seq", UVM_LOW)
-        `uvm_info(get_name(), "--------------------", UVM_LOW)
-    endtask
-endclass
-
-class apb_read_test extends base_test;
-    `uvm_component_utils(apb_read_test)
-
-    apb_read_seq r_seq; 
-
-    function new(string name, uvm_component parent);
-        super.new(name, parent);
-    endfunction
-
-    task run_phase(uvm_phase phase);
-        phase.raise_objection(this);
-        
-        r_seq = apb_read_seq::type_id::create("r_seq");
-        r_seq.start(env.agnt.seqr); // Start the READ sequence
-        
-        phase.drop_objection(this);
-    endtask
-endclass
-
-
-
-class apb_comprehensive_test extends base_test;
-    `uvm_component_utils(apb_comprehensive_test)
-
-    apb_write_read_seq rw_seq;
-
-    function new(string name, uvm_component parent);
-        super.new(name, parent);
-    endfunction
-
-    task run_phase(uvm_phase phase);
-        phase.raise_objection(this);
-        
-        rw_seq = apb_write_read_seq::type_id::create("rw_seq");
-        rw_seq.start(env.agnt.seqr); // Start the MIXED sequence
-        
-        phase.drop_objection(this);
-    endtask
-endclass
+endclass //base_test extends uvm_test
 
 ///////////////////////////////////////
 //////////// MY TB TOP       //////////
@@ -1088,8 +906,7 @@ module full_tb;
 
     initial begin
         uvm_config_db#(virtual APB_intf)::set(null, "*", "intf", intf);
-        // run_test("base_test");
-        run_test("apb_write_test");
+        run_test("base_test");
     end
 
     initial begin

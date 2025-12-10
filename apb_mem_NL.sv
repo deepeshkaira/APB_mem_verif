@@ -1,29 +1,11 @@
-`timescale 1ns / 1ps
-//////////////////////////////////////////////////////////////////////////////////
-// Company: 
-// Engineer: 
-// 
-// Create Date: 03.12.2025 01:25:58
-// Design Name: 
-// Module Name: apb_mem
-// Project Name: 
-// Target Devices: 
-// Tool Versions: 
-// Description: 
-// 
-// Dependencies: 
-// 
-// Revision:
-// Revision 0.01 - File Created
-// Additional Comments:
-// 
-//////////////////////////////////////////////////////////////////////////////////
+`timescale 1ns / 1ns
 
+// apb_memory NO latch design
 
-
-module apb_mem #(parameter DEPTH = 5) (
+module apb_mem_NL #(parameter DEPTH = 5) (
     input logic PCLK,
     input logic PRESETn,
+
     input logic PSEL1,
     input logic PWRITE,
     input logic PENABLE,
@@ -41,7 +23,7 @@ module apb_mem #(parameter DEPTH = 5) (
     logic [31:0] mem [2**DEPTH-1:0];
     logic [31:0] PRDATA_reg;
     logic PREADY_reg;
-    logic PSLVERR_reg;
+    logic PSLVERR_reg; 
 
     always @(posedge PCLK or negedge PRESETn ) begin
         
@@ -65,22 +47,45 @@ module apb_mem #(parameter DEPTH = 5) (
 				SETUP:begin
 					if(PENABLE) begin
 						PREADY_reg <= 1;
-						if((PADDR >= 2**DEPTH) || (PWRITE && (PWDATA === 32'hx || PWDATA === 32'hz) || ((!PWRITE) && mem[PADDR[DEPTH-1:0]] == 32'hffffffff))) begin
+						if((PADDR[DEPTH+1:2] >= 2**DEPTH))
+                            // can include this condition as well to pull up the pslverr high
+                            // || ((!PWRITE) && mem[PADDR[DEPTH-1:0]] == 32'hffffffff))
 							PSLVERR_reg <= 1;
-						end
-						if(!PWRITE) PRDATA_reg <= mem[PADDR[DEPTH-1:0]];
+                        else 
+                            PSLVERR_reg <= 0;
+						
+// ADDRESSING NOTE: APB is Byte-Addressable, Memory is Word-Indexed (32-bit).
+// We discard the lower 2 bits (byte offset) to convert Byte Addr -> Word Index.
+//
+// Example:
+//   PADDR = 0x00 -> Index 0  (mem[0])
+//   PADDR = 0x04 -> Index 1  (mem[1])
+//   PADDR = 0x08 -> Index 2  (mem[2])
+//
+// Implementation: Use PADDR[DEPTH+1:2] instead of PADDR[DEPTH-1:0]
+
+						if(!PWRITE) PRDATA_reg <= mem[PADDR[DEPTH+1:2]];
 					end
 				end
 
 				ACCESS: begin
 					PREADY_reg <= 0;
 					if(PWRITE && !PSLVERR_reg) begin
-						mem[PADDR[DEPTH-1:0]] <= PWDATA;
+						mem[PADDR[DEPTH+1:2]] <= PWDATA;
 					end
 				end
 			endcase
             end
     end
+
+// Check: When writing, Data must never be X or Z
+property p_valid_write_data;
+    @(posedge PCLK) disable iff (!PRESETn)
+    (PSEL1 && PENABLE && PWRITE) |-> !$isunknown(PWDATA);
+endproperty
+
+assert_valid_data: assert property (p_valid_write_data)
+    else $error("APB PROTOCOL VIOLATION: Write Data contains X or Z");
 
 	assign PRDATA = PRDATA_reg;
 	assign PREADY = PREADY_reg;
@@ -97,7 +102,12 @@ module apb_mem #(parameter DEPTH = 5) (
                 
             SETUP:
             begin
-                if(PSEL1 && PENABLE) next_state = ACCESS;
+// this state has been added just in case the PENABLE signal never come to the design and we will be stuck here forever.
+// If some master had instructions to come to SETUP state after the design is done with ACCESS. And after that it disconnects with the
+// slave. During this PENABLE will never come and the FSM will be stuck in this state forever. Even if some other MASTER comes and want to access memory. It willl be an issue because the 
+// slave is stuck in the SETUP state. (for more check the DOC)
+                if (!PSEL1) next_state = IDLE;   
+                else if (PENABLE) next_state = ACCESS;
                 else  next_state = state;
             end
 

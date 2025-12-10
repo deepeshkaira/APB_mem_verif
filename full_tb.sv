@@ -69,27 +69,37 @@ interface APB_intf (input logic clk);
             @(posedge clk) $rose(PENABLE) |-> $stable(PADDR) ##0 $stable(PWDATA) ##0 $stable(PWRITE) ##0 $stable(PSEL1);
         endproperty
 
-        // Property to check whether the PENABLE is deasserted 1 clk after PREADY signal is asserted
-        property enable_deassert_ch;
-            @(posedge clk) $fell(PENABLE) |-> s1;
-        endproperty
 
+
+
+        // Property to chek whether the PENABLE is deasserted 1 clk after PREADY signal is asserted
         sequence s1;
             !($past(PENABLE, 2) && $past(PREADY, 2));
         endsequence
+
+        property enable_deassert_ch;
+            @(posedge clk)
+            (s1 and $rose(PREADY)) |=> $fell(PENABLE);
+        endproperty
         
-        // Property to check whether the PENABLE is deasserted without PREADY being asserted
+
+
+
+
+
+        // Property to check whether the PENABLE is deasserted without PREADY being asserted. Also, added to skip the first check after reset.
+        // since, PREADY will never be high in the past when simulation has just started, adding and checking PENABLE was 1 anytime when PREADY, makes sense
         property enable_deassert_ch2;
-            @(posedge clk) 
-            if(!$isunknown(PENABLE))
-                $fell(PENABLE) |-> $past(PREADY) == 1;
+            @(posedge clk)
+            if((PRESETn) && !$isunknown(PENABLE))
+                $fell(PENABLE) && $past(PENABLE,1,PREADY) |-> $past(PREADY) == 1;
         endproperty
     
         // properties defined earlier are asserted here.
         assert property (enable_ch)
-            `uvm_info("enable_ch", "ENABLE DRIVED 1 CYCLE AFTER PSEL1", UVM_DEBUG)
+            `uvm_info("enable_ch", "ENABLE DRIVEn 1 CYCLE AFTER PSEL1", UVM_DEBUG)
         else
-            `uvm_error("enable_ch", "ENABLE NOT DRIVED 1 CYCLE AFTER PSEL1")
+            `uvm_error("enable_ch", "ENABLE NOT DRIVEn 1 CYCLE AFTER PSEL1")
 
         assert property (check_PR_PSL_PEN)
             `uvm_info("check_PR_PSL_PEN", "PREADY is 1 only when PSEL1 and PENABLE are both 1", UVM_DEBUG)
@@ -110,10 +120,7 @@ interface APB_intf (input logic clk);
             `uvm_info("enable_deassert_ch2", "PENABLE DEASSERTED WHEN PREADY ASSERTED", UVM_DEBUG)
         else
             `uvm_error("enable_deassert_ch2", "PENABLE GETTING DEASSERTED WITHOUT PREADY BEING ASSERTED")
-
-
-        assert 
-        
+   
 endinterface
 
 
@@ -170,8 +177,8 @@ class transaction extends uvm_sequence_item;
             PADDR.size() == 1;
         }
         else {
-            PWDATA.size() inside {[1:3]}; 
-            PADDR.size() inside {[1:3]};
+            PWDATA.size() inside {[1:10]}; 
+            PADDR.size() inside {[1:10]};
         }
         PWDATA.size() == PADDR.size();
     }
@@ -189,18 +196,25 @@ class transaction extends uvm_sequence_item;
                 PADDR[i] inside {[0:(2**5)-1]};
     }
 
+    //  Constructor: new
+    function new(string name = "transaction");
+        super.new(name);
+    endfunction: new
+
     // Functions
     /// this tells us the number of test packets we are dealing with
     function void pre_randomize();
-        p_id++;
         `uvm_info("TRANSACTION",$sformatf("This is value for p_id : %0d",p_id),UVM_NONE)
+        p_id++;
     endfunction
 
     // this tells us the type of check we are doing with the current packet
     function void post_randomize();
         if(!PRESETn) f_id = 5;
+        // for write operations
         else if (PWRITE && PADDR.size() == 1)  f_id = 1;
         else if (PWRITE && PADDR.size() > 1)   f_id = 2;
+        // for read operations
         else if (!PWRITE && PADDR.size() == 1)   f_id = 3;
         else if (!PWRITE && PADDR.size() > 1)   f_id = 4;
     endfunction
@@ -213,17 +227,12 @@ class transaction extends uvm_sequence_item;
             PWDATA = new[1];
         else
             PWDATA = new[PWDATA.size()+1] (PWDATA);
-       
+
         if(PADDR.size() == 0)
             PADDR = new[1];
         else
             PADDR = new[PADDR.size()+1] (PADDR);    
     endfunction
-
-    //  Constructor: new
-    function new(string name = "transaction");
-        super.new(name);
-    endfunction: new
 
     /// functions , may use at some stage
 
@@ -247,6 +256,9 @@ endclass: transaction
 //////// FUNCTIONAL COVERAGE ////
 /////////////////////////////////
 
+// we are using subscriber here because in this we don't need to explicitly define the analysis ports for catching 
+// the incoming data. Lets say from the DUT, it should automatically take the incoming data to the class.
+// and further use it for coverage analysis.
 class fun_cov extends uvm_subscriber#(transaction);
     `uvm_component_utils(fun_cov)
     
@@ -295,10 +307,12 @@ class fun_cov extends uvm_subscriber#(transaction);
        Advantage - Easy to implement Disadvantage - Lot of signals will be sampled more than once for same value */
     function void cov_sample;
         `uvm_info("COV_SAMPLES_NUMBER",$sformatf("total number of cases : %0d",trans.PADDR.size()),UVM_NONE);
+        // this will be checking the coverage as per the number of the addresses in the ADDR array.
         for(int j = 0; j < trans.PADDR.size(); j++) begin
             _tempRDATA = trans.PRDATA[j];
             _tempPWDATA = trans.PWDATA[j];
             _tempPADDR = trans.PADDR[j];
+            /// this is to sample the incoming data to check coverage
             apb_cg.sample();
             `uvm_info("COV",$sformatf("this is coverage sample number %0d",j),UVM_NONE);
         end
@@ -310,15 +324,17 @@ class fun_cov extends uvm_subscriber#(transaction);
         apb_cg = new();
     endfunction //new()
 
-    function void write(T t);
-        trans = t;
-        cov_sample();
-    endfunction
-
     virtual function void build_phase(uvm_phase phase);
         super.build_phase(phase);
         trans = new("cov_trans");
     endfunction: build_phase
+
+    // function declared here catches the incoming data from the external classes, like monitor
+    function void write(transaction t);
+        trans = t;
+        cov_sample();
+    endfunction
+
     
 endclass
 
@@ -340,15 +356,16 @@ class rnd_sequence extends uvm_sequence;
         trans = transaction::type_id::create("trans");
         if(!uvm_config_db#(int)::get(null, "seq.", "no_cases", no_of_testcases)) begin
             `uvm_warning(get_name(), "Cant get no of testcases, Using default no of test cases = 10")
-            no_of_testcases = 1;
+            // just in case there is an issue in recieving the number of testcases from config_db
+            no_of_testcases = 10;
         end
     endfunction: new
 
     //  Task: pre_body
     //  This task is a user-definable callback that is called before the execution 
-    //  of <body> ~only~ when the sequence is started with <start>.
+    //  of <body> only when the sequence is started with <start>.
     //  If <start> is called with ~call_pre_post~ set to 0, ~pre_body~ is not called.
-    // extern virtual task pre_body();
+    
     virtual task pre_body();
         start_item(trans);
         trans.p_id = 1;
@@ -360,20 +377,23 @@ class rnd_sequence extends uvm_sequence;
     endtask
 
     //  Task: body
-    //  This is the user-defined task where the main sequence code resides.
-    //  extern virtual task body();
+    //  This is the user-defined task where the main sequence code is written
+
     virtual task body();
         `uvm_info("rnd_sequence","rnd_sequence block got executed",UVM_NONE);
         for (int i = 0; i < no_of_testcases-1; i++) begin
             start_item(trans);
+            // start the randomization and transactions.
+            // asks the sequencer for permission to send the data
             if(!trans.randomize())
                 `uvm_fatal(get_name(), "Randomization failed");
             `uvm_info(get_name(), trans.convert2string(), UVM_MEDIUM)
-            
+           // `uvm_info("rnd_sequence","task body executed",UVM_NONE)
             finish_item(trans);
+            `uvm_info("rnd_sequence",$sformatf("executed test case number : %0d",i),UVM_NONE)
         end
     endtask: body
-    
+
 endclass: rnd_sequence
 
 
@@ -386,11 +406,11 @@ class driver extends uvm_driver#(transaction);
     
     //  Group: Variables
     transaction trans_drv;
-    // virtual APB_intf.DRV drv_intf;
+    // driver interface point to make the signals enter the DUT
     virtual APB_intf drv_intf;
     int i;
     event DRV_DONE;
-    
+
     //  Constructor: new
     function new(string name, uvm_component parent);
         super.new(name, parent);
@@ -407,44 +427,90 @@ class driver extends uvm_driver#(transaction);
     endfunction: build_phase
 
     //  Group: Functions
-    // idle task - IDLE operating state
+    //  idle task - IDLE operating state
     task idle();
         drv_intf.drv_cb.PSEL1   <= 0;
         drv_intf.drv_cb.PENABLE <= 0;
+        // `uvm_info("DRV",$sformatf("IDLE state of FSM. PSEL1 = %b and PENABLE = %b",drv_intf.drv_cb.PSEL1,drv_intf.drv_cb.PENABLE),UVM_NONE);
     endtask //idle
 
     // setup task - SETUP operating state (Sets all the input for the slave)
     task setup();
         // #2;
         drv_intf.drv_cb.PSEL1   <= 1;
-        drv_intf.drv_cb.PENABLE <= 0;
+        drv_intf.drv_cb.PENABLE <= 1;
         drv_intf.drv_cb.PRESETn <= trans_drv.PRESETn;
         drv_intf.drv_cb.PWRITE  <= trans_drv.PWRITE;
         drv_intf.drv_cb.PWDATA  <= trans_drv.PWDATA[i];
+        `uvm_info("DRV",$sformatf("SETUP DATA value now : %0h",trans_drv.PWDATA[i]),UVM_NONE);
         drv_intf.drv_cb.PADDR   <= trans_drv.PADDR[i];
+        `uvm_info("DRV",$sformatf("SETUP ADDRESS value now : %0h",trans_drv.PADDR[i]),UVM_NONE);
     endtask
 
     // access task - ACCESS operating state
     task access();
         drv_intf.drv_cb.PSEL1   <= 1;
         drv_intf.drv_cb.PENABLE <= 1;
+        // `uvm_info("DRV",$sformatf("ACCESS state of FSM. PSEL1 = %b and PENABLE = %b",drv_intf.drv_cb.PSEL1,drv_intf.drv_cb.PENABLE),UVM_NONE);
+    endtask
+
+    /// run through all the states of FSM
+    // no data written. Just traverse
+    task full_drive_all_states();
+        drv_intf.drv_cb.PSEL1 <= 0;
+
+        @(drv_intf.drv_cb);
+        drv_intf.drv_cb.PSEL1 <= 1;
+        @(drv_intf.drv_cb);
+        drv_intf.drv_cb.PENABLE <= 1;
+        drv_intf.drv_cb.PRESETn <= trans_drv.PRESETn;
+        drv_intf.drv_cb.PWRITE  <= 1;
+        drv_intf.drv_cb.PWDATA  <= 0;
+        `uvm_info("DRV",$sformatf("SETUP DATA value now : %0h",trans_drv.PWDATA[i]),UVM_NONE);
+        drv_intf.drv_cb.PADDR   <= 0;
+        `uvm_info("DRV",$sformatf("SETUP ADDRESS value now : %0h",trans_drv.PADDR[i]),UVM_NONE);
+        @(drv_intf.drv_cb);
+        drv_intf.drv_cb.PSEL1 <= 0;
+    endtask
+
+    // write to the apb memory
+    task only_write_to_memory();
+        drv_intf.drv_cb.PSEL1 <= 0;
+
+        @(drv_intf.drv_cb);
+        drv_intf.drv_cb.PSEL1 <= 1;
+        @(drv_intf.drv_cb);
+        drv_intf.drv_cb.PENABLE <= 1;
+        drv_intf.drv_cb.PRESETn <= trans_drv.PRESETn;
+        drv_intf.drv_cb.PWRITE  <= 1;
+            drv_intf.drv_cb.PWDATA  <= trans_drv.PWDATA[i];;
+            `uvm_info("DRV",$sformatf("SETUP DATA value now : %0h",trans_drv.PWDATA[i]),UVM_NONE);
+            drv_intf.drv_cb.PADDR   <=  trans_drv.PADDR[i];
+            `uvm_info("DRV",$sformatf("SETUP ADDRESS value now : %0h",trans_drv.PADDR[i]),UVM_NONE);            
+        @(drv_intf.drv_cb);
+        drv_intf.drv_cb.PSEL1 <= 1;
     endtask
 
     // drive task - Switches b/w different operating states
     task drive();
         if(!trans_drv.PRESETn) begin
+            
             @(drv_intf.drv_cb);
             drv_intf.drv_cb.PRESETn <= trans_drv.PRESETn;
-            #10;
+            @(drv_intf.drv_cb);
+            // #10;
             drv_intf.drv_cb.PRESETn <= 1;
         end
-        else begin  
+        else begin
             @(drv_intf.drv_cb);
             for(i=0; i<trans_drv.PADDR.size(); i++) begin
-                setup();
-                @(drv_intf.drv_cb);
-                access();
+                // full_drive_all_states();
+                only_write_to_memory();
+                // setup();
+                // @(drv_intf.drv_cb);
+                // access();
                 wait(drv_intf.drv_cb.PREADY == 1);
+                
             end
         end
         idle();
@@ -457,6 +523,7 @@ class driver extends uvm_driver#(transaction);
         drive();
         @(drv_intf.drv_cb);
         seq_item_port.item_done();
+        `uvm_info("DRV",$sformatf("received item_done at time %0t",$realtime),UVM_NONE);
     end
     endtask: run_phase
     
@@ -550,7 +617,7 @@ class monitor extends uvm_monitor;
         end 
     endtask
 
-    
+
 endclass //monitor extends uvm_monitor
 
 ///////////////////////////////////////
@@ -657,7 +724,7 @@ class scoreboard extends uvm_scoreboard;
     function new(string name, uvm_component parent);
         super.new(name, parent);
         `uvm_info("scoreboard","scoreboard constructor got executed",UVM_NONE);
-    endfunction //new()
+    endfunction
 
     //  Function: build_phase
     virtual function void build_phase(uvm_phase phase);
@@ -667,8 +734,8 @@ class scoreboard extends uvm_scoreboard;
         ap_exp = new("ap_exp", this);
         `uvm_info("scoreboard","scoreboard build_phase block got executed",UVM_NONE);
     endfunction: build_phase
-    
-endclass //scoreboard extends uvm_scoreboard
+
+endclass
 
 ///////////////////////////////////////
 //////////// MY AGENT  ////////////////
@@ -694,33 +761,38 @@ class agent extends uvm_agent;
     function new(string name, uvm_component parent);
         super.new(name, parent);
         `uvm_info("agent","agent constructor block got executed",UVM_NONE);
-    endfunction //new()
+    endfunction
 
     //  Function: build_phase
     virtual function void build_phase(uvm_phase phase);
         super.build_phase(phase);
         `uvm_info("agent","agent build phase block got executed",UVM_NONE);
+
         if(!uvm_config_db#(agent_config)::get(this, "*", "agnt_cfg", agnt_cfg))
         `uvm_fatal(get_name(), "agnt_cfg cannot be found in ConfigDB!")
-        
+
         mon = monitor::type_id::create("mon", this);
         fc = fun_cov::type_id::create("fc", this);
 
+        // make driver and sequencer instance only when active = UVM_ACTIVE
         if(agnt_cfg.active) begin
             drv = driver::type_id::create("drv", this);
             seqr = uvm_sequencer#(transaction)::type_id::create("seqr", this);
         end
 
     endfunction: build_phase
-    // extern function void build_phase(uvm_phase phase);
     
     //  Function: connect_phase
     virtual function void connect_phase(uvm_phase phase);
         super.connect_phase(phase);
+        // connect the virtual interface with the monitor interface
         mon.intf = agnt_cfg.intf;
+        // connect the monitor analysis port with the agent analysis port
         ap = mon.ap;
         `uvm_info("agent","agent connect phase block got executed",UVM_NONE);
 
+
+        // connect only when active in agnt_cnfg.active = UVM_ACTIVE
         if(agnt_cfg.active) begin
             drv.seq_item_port.connect(seqr.seq_item_export);
             drv.drv_intf = agnt_cfg.intf;
@@ -728,7 +800,7 @@ class agent extends uvm_agent;
 
         mon.ap.connect(fc.analysis_export);
 
-    endfunction: connect_phase
+    endfunction : connect_phase
     // extern function void connect_phase(uvm_phase phase);
     
 endclass
@@ -757,6 +829,7 @@ class environment extends uvm_env;
 
     virtual function void connect_phase(uvm_phase phase);
         super.connect_phase(phase);
+        // connect the agent port to scoreboard port
         agnt.ap.connect(scb.ap_exp);
         `uvm_info("env","env connect phase block got executed",UVM_NONE);
     endfunction: connect_phase
@@ -790,9 +863,11 @@ class base_test extends uvm_test;
         `uvm_info("base test","base test build phase block got executed",UVM_NONE);
         if(!uvm_config_db#(virtual APB_intf)::get(this, "*", "intf", agnt_cfg.intf))
         `uvm_fatal(get_name(), "intf cannot be found in ConfigDB!")
-    
+
+        // setting here a handle so that classes inside agent can access the agent_config block from here.
         uvm_config_db#(agent_config)::set(this, "env.agnt.*", "agnt_cfg", agnt_cfg);
-        uvm_config_db#(int)::set(null, "seq.*", "no_cases", 100);
+        /// set the number of cases for the design from the base_test
+        uvm_config_db#(int)::set(null, "seq.*", "no_cases", 5);
         
         seq = new();
         env = environment::type_id::create("env", this);
@@ -816,15 +891,14 @@ endclass //base_test extends uvm_test
 //////////// MY TB TOP       //////////
 ///////////////////////////////////////
 
-// `include "package.svh"
-// `include "apb_mem.sv"
 
 module full_tb;
     bit clk = 0;
 
     APB_intf intf(clk);
 
-    apb_mem dut(.PCLK(clk), .PRESETn(intf.PRESETn), .PSEL1(intf.PSEL1), .PWRITE(intf.PWRITE), 
+    /// connect the dut to interface signals
+    apb_mem_NL dut(.PCLK(clk), .PRESETn(intf.PRESETn), .PSEL1(intf.PSEL1), .PWRITE(intf.PWRITE), 
                 .PENABLE(intf.PENABLE), .PADDR(intf.PADDR), .PWDATA(intf.PWDATA),
                 .PRDATA(intf.PRDATA), .PREADY(intf.PREADY), .PSLVERR(intf.PSLVERR));
 
@@ -839,8 +913,8 @@ module full_tb;
         $dumpfile("dump.vcd");
         $dumpvars;
         $assertvacuousoff(0);
-      	#1350;
-        $finish();
+      	// #1350;
+        // $finish();
     end
 
 endmodule

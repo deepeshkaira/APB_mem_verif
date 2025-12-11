@@ -1,3 +1,4 @@
+`timescale 1ns/1ns
 `include "uvm_macros.svh"
 import uvm_pkg::*;
 
@@ -173,8 +174,8 @@ class transaction extends uvm_sequence_item;
             PADDR.size() == 1;
         }
         else {
-            PWDATA.size() inside {[1:10]}; 
-            PADDR.size() inside {[1:10]};
+            PWDATA.size() inside {[1:20]}; 
+            PADDR.size() inside {[1:20]};
         }
         PWDATA.size() == PADDR.size();
     }
@@ -409,7 +410,7 @@ class rnd_sequence extends uvm_sequence;
             // asks the sequencer for permission to send the data
             if(!trans.randomize())
                 `uvm_fatal(get_name(), "Randomization failed");
-            `uvm_info(get_name(), trans.convert2string(), UVM_MEDIUM)
+            // `uvm_info(get_name(), trans.convert2string(), UVM_MEDIUM)
            // `uvm_info("rnd_sequence","task body executed",UVM_NONE)
             finish_item(trans);
             `uvm_info("rnd_sequence",$sformatf("executed test case number : %0d",i),UVM_NONE)
@@ -430,18 +431,41 @@ class apb_write_seq extends rnd_sequence;
     endfunction
 
     virtual task body();
-        `uvm_info(get_name(), "STARTING WRITE SEQUENCE", UVM_NONE)
+        `uvm_info(get_name(), "--------------------------", UVM_LOW)
+        `uvm_info(get_name(), "Seq statr: apb_write_seq", UVM_LOW)
+        `uvm_info(get_name(), "-----------------------------", UVM_LOW)
+
+        // SYSTEM RESET
+        `uvm_info(get_name(), "[PHASE 1] Asserting Reset", UVM_MEDIUM)
+        start_item(trans);
+        if(!trans.randomize() with { 
+            PRESETn == 0; 
+            }) `uvm_fatal(get_name(), "Randomization Failed during Reset Phase")
+        finish_item(trans);
+
+
+        // RANDOM WRITE TRAFFIC
+        `uvm_info(get_name(), " Starting Random Write Bursts", UVM_MEDIUM)
+        
         repeat(no_of_testcases) begin
             start_item(trans);
-            // Constraint: FORCE PWRITE to 1
-            assert(trans.randomize() with { 
-                PWRITE == 1; 
+            
+            // applied minimal constraints here.
+            // the transaction class pick a random size between 1 and 10 as per 'constraint arr_size'.
+            // also, the PADDR.SIZE will be equal to PWDATA.SEIZE. 
+            if(!trans.randomize() with { 
+                PWRITE  == 1; 
                 PRESETn == 1; 
-                // Optional: Constrain array size for single transfers
-                PADDR.size() == 1; 
-            });
+            }) `uvm_fatal(get_name(), "Randomization Failed during Traffic Phase")
+            `uvm_info(get_name(), trans.convert2string(), UVM_MEDIUM)
+            `uvm_info(get_name(), $sformatf(" Write Burst Address with Size: %0d, Burst DATA with size : %0d ", trans.PADDR.size(), trans.PWDATA.size()), UVM_HIGH)
+            
             finish_item(trans);
         end
+
+        `uvm_info(get_name(), "----------------------", UVM_LOW)
+        `uvm_info(get_name(), "Seq Done: apb_write_seq", UVM_LOW)
+        `uvm_info(get_name(), "--------------------", UVM_LOW)
     endtask
 endclass
 
@@ -526,33 +550,33 @@ class driver extends uvm_driver#(transaction);
         `uvm_fatal(get_name(), "DRIVER cant get interface")
     endfunction: build_phase
 
-    //  Group: Functions
-    //  idle task - IDLE operating state
-    task idle();
-        drv_intf.drv_cb.PSEL1   <= 0;
-        drv_intf.drv_cb.PENABLE <= 0;
-        // `uvm_info("DRV",$sformatf("IDLE state of FSM. PSEL1 = %b and PENABLE = %b",drv_intf.drv_cb.PSEL1,drv_intf.drv_cb.PENABLE),UVM_NONE);
-    endtask //idle
+    //  Group: Functions -- not being used
+    // //  idle task - IDLE operating state
+    // task idle();
+    //     drv_intf.drv_cb.PSEL1   <= 0;
+    //     drv_intf.drv_cb.PENABLE <= 0;
+    //     // `uvm_info("DRV",$sformatf("IDLE state of FSM. PSEL1 = %b and PENABLE = %b",drv_intf.drv_cb.PSEL1,drv_intf.drv_cb.PENABLE),UVM_NONE);
+    // endtask //idle
 
-    // setup task - SETUP operating state (Sets all the input for the slave)
-    task setup();
-        // #2;
-        drv_intf.drv_cb.PSEL1   <= 1;
-        drv_intf.drv_cb.PENABLE <= 1;
-        drv_intf.drv_cb.PRESETn <= trans_drv.PRESETn;
-        drv_intf.drv_cb.PWRITE  <= trans_drv.PWRITE;
-        drv_intf.drv_cb.PWDATA  <= trans_drv.PWDATA[i];
-        `uvm_info("DRV",$sformatf("SETUP DATA value now : %0h",trans_drv.PWDATA[i]),UVM_NONE);
-        drv_intf.drv_cb.PADDR   <= trans_drv.PADDR[i];
-        `uvm_info("DRV",$sformatf("SETUP ADDRESS value now : %0h",trans_drv.PADDR[i]),UVM_NONE);
-    endtask
+    // // setup task - SETUP operating state (Sets all the input for the slave)
+    // task setup();
+    //     // #2;
+    //     drv_intf.drv_cb.PSEL1   <= 1;
+    //     drv_intf.drv_cb.PENABLE <= 1;
+    //     drv_intf.drv_cb.PRESETn <= trans_drv.PRESETn;
+    //     drv_intf.drv_cb.PWRITE  <= trans_drv.PWRITE;
+    //     drv_intf.drv_cb.PWDATA  <= trans_drv.PWDATA[i];
+    //     `uvm_info("DRV",$sformatf("SETUP DATA value now : %0h",trans_drv.PWDATA[i]),UVM_NONE);
+    //     drv_intf.drv_cb.PADDR   <= trans_drv.PADDR[i];
+    //     `uvm_info("DRV",$sformatf("SETUP ADDRESS value now : %0h",trans_drv.PADDR[i]),UVM_NONE);
+    // endtask
 
-    // access task - ACCESS operating state
-    task access();
-        drv_intf.drv_cb.PSEL1   <= 1;
-        drv_intf.drv_cb.PENABLE <= 1;
-        // `uvm_info("DRV",$sformatf("ACCESS state of FSM. PSEL1 = %b and PENABLE = %b",drv_intf.drv_cb.PSEL1,drv_intf.drv_cb.PENABLE),UVM_NONE);
-    endtask
+    // // access task - ACCESS operating state
+    // task access();
+    //     drv_intf.drv_cb.PSEL1   <= 1;
+    //     drv_intf.drv_cb.PENABLE <= 1;
+    //     // `uvm_info("DRV",$sformatf("ACCESS state of FSM. PSEL1 = %b and PENABLE = %b",drv_intf.drv_cb.PSEL1,drv_intf.drv_cb.PENABLE),UVM_NONE);
+    // endtask
 
     task drive_transfer(int index);
         // 1. SETUP PHASE
@@ -718,13 +742,19 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
     // Variables
     const int ram_depth = 2**DEPTH;
     bit [31:0] ram_mem [];  // Memory for DEPTH defined
-
-    /// convert byte address to word index
-    bit [31:0] word_index;
     
+    // constructor
+    function new(string name, uvm_component parent);
+        super.new(name, parent);
+        ram_mem = new[ram_depth];
+        `uvm_info("ref_model","ref_model block got executed",UVM_NONE);
+    endfunction
 
     // Function: get_ref_val()
     function transaction get_ref_val(transaction trans);
+
+    /// convert byte address to word index
+    bit [31:0] word_index;
 
         if(trans.PRESETn == 0) begin
             foreach (ram_mem[j]) ram_mem[j] = 32'hffffffff;
@@ -733,11 +763,13 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
             trans.PREADY = 0;
             return trans;
         end
+
         for(int i=0; i<trans.PADDR.size(); i++) begin
 
-            word_index = trans.PADDR[i] >> 2; /// ignoring the last 2 bit values here given from the APB MASTER
+            word_index = trans.PADDR[i] >> 2; /// ignoring the last 2 bit values here given from the APB MASTER (convert byte addressing to word addressing so that no memory locatuons are left behind)
 
             // if(trans.PADDR[i] >= ram_depth) begin
+            // check for word index if more than the memory size
             if(word_index >= ram_depth) begin
                 trans.PSLVERR = 1;
                 trans.PRDATA[i] = 32'b0;
@@ -746,22 +778,25 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
             end
 
             if(trans.PWRITE == 1) begin
+                // bad data written , turn PSLVERR as 1
                 if(trans.PWDATA[i] === 32'hx || trans.PWDATA[i] === 32'hz ) begin
                     trans.PRDATA[i] = 32'b0;
                     trans.PREADY = 1;
                     trans.PSLVERR = 1;
                     continue;
                 end
+                // else write full 32 bit data in the memory location calculated
                 ram_mem [word_index] = trans.PWDATA[i];
                 trans.PRDATA[i] = 32'b0;
                 trans.PREADY = 1;
                 trans.PSLVERR = 0;
             end
             else begin
-                if(ram_mem[trans.PADDR[i]] == 32'hffffffff) begin
+                if(ram_mem[word_index] == 32'hffffffff) begin
+                    /// reading uninitialized memory location is valid in APB, will receive GARBAGE though 
                     trans.PRDATA[i] = 32'hffffffff;
                     trans.PREADY = 1;
-                    trans.PSLVERR = 1;
+                    trans.PSLVERR = 0;
                     continue;
                 end
                 trans.PRDATA[i] = ram_mem [word_index];
@@ -772,12 +807,7 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
         return trans;
     endfunction
 
-    // Constructor
-    function new(string name, uvm_component parent);
-        super.new(name, parent);
-        ram_mem = new[ram_depth];
-        `uvm_info("ref_model","ref_model block got executed",UVM_NONE);
-    endfunction //new()
+
 endclass
 
 ///////////////////////////////////////
@@ -962,7 +992,7 @@ class base_test extends uvm_test;
         // setting here a handle so that classes inside agent can access the agent_config block from here.
         uvm_config_db#(agent_config)::set(this, "env.agnt.*", "agnt_cfg", agnt_cfg);
         /// set the number of cases for the design from the base_test
-        uvm_config_db#(int)::set(null, "seq.*", "no_cases", 50);
+        uvm_config_db#(int)::set(null, "seq.*", "no_cases", 10);
         
         // seq = new();
         env = environment::type_id::create("env", this);
@@ -983,51 +1013,25 @@ class base_test extends uvm_test;
     
 endclass
 
-class apb_write_seq extends rnd_sequence;
-    `uvm_object_utils(apb_write_seq)
+class apb_write_test extends base_test;
+    `uvm_component_utils(apb_write_test)
 
-    function new(string name="apb_write_seq");
-        super.new(name);
+    apb_write_seq w_seq; 
+
+    function new(string name, uvm_component parent);
+        super.new(name, parent);
     endfunction
 
-    virtual task body();
-        `uvm_info(get_name(), "--------------------------", UVM_LOW)
-        `uvm_info(get_name(), "Seq statr: apb_write_seq", UVM_LOW)
-        `uvm_info(get_name(), "-----------------------------", UVM_LOW)
-
-        // SYSTEM RESET
-        `uvm_info(get_name(), "[PHASE 1] Asserting Reset", UVM_MEDIUM)
-        start_item(trans);
-        if(!trans.randomize() with { 
-            PRESETn == 0; 
-            }) `uvm_fatal(get_name(), "Randomization Failed during Reset Phase")
-        finish_item(trans);
-
-
-        // RANDOM WRITE TRAFFIC
-        `uvm_info(get_name(), " Starting Random Write Bursts", UVM_MEDIUM)
+    task run_phase(uvm_phase phase);
+        phase.raise_objection(this);
         
-        repeat(no_of_testcases) begin
-            start_item(trans);
-            
-            // applied minimal constraints here.
-            // the transaction class pick a random size between 1 and 10 as per 'constraint arr_size'.
-            // also, the PADDR.SIZE will be equal to PWDATA.SEIZE. 
-            if(!trans.randomize() with { 
-                PWRITE  == 1; 
-                PRESETn == 1; 
-            }) `uvm_fatal(get_name(), "Randomization Failed during Traffic Phase")
-            
-            `uvm_info(get_name(), $sformatf(" Write Burst Address with Size: %0d, Burst DATA with size : %0d ", trans.PADDR.size(), trans.PWDATA.size()), UVM_HIGH)
-            
-            finish_item(trans);
-        end
-
-        `uvm_info(get_name(), "----------------------", UVM_LOW)
-        `uvm_info(get_name(), "Seq Done: apb_write_seq", UVM_LOW)
-        `uvm_info(get_name(), "--------------------", UVM_LOW)
+        w_seq = apb_write_seq::type_id::create("w_seq");
+        w_seq.start(env.agnt.seqr); // Start the READ sequence
+        
+        phase.drop_objection(this);
     endtask
 endclass
+
 
 class apb_read_test extends base_test;
     `uvm_component_utils(apb_read_test)

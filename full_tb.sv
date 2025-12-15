@@ -180,6 +180,16 @@ class transaction extends uvm_sequence_item;
         PWDATA.size() == PADDR.size();
     }
 
+    // Zero out Write Data during Read operations
+    // the above constraint and the below constraint will contradict each other, lets run simulation and see what happens
+    constraint clean_read_data {
+        if (PWRITE == 0) {
+            foreach (PWDATA[i]) {
+                PWDATA[i] == 32'h0;
+            }
+        }
+    }
+
     // Ensure addresses are 32-bit aligned (Byte Addressing)
     constraint align_addr {
         foreach(PADDR[i]) {
@@ -291,10 +301,12 @@ class fun_cov extends uvm_subscriber#(transaction);
         PWDATA: coverpoint _tempPWDATA {
             bins pwdata[16] = {[0:32'hffffffff]}; 
         }
+        /*
         PADDR: coverpoint _tempPADDR { 
             bins paddr[] = {[0:32'h0000001f]}; 
             illegal_bins il_paddr = default;
         }
+            */
         PREADY: coverpoint trans.PREADY { 
             bins pready = {1};
             illegal_bins il_pready= {0};
@@ -317,7 +329,7 @@ class fun_cov extends uvm_subscriber#(transaction);
         PSEL1xPWRITE: cross PSEL1, PWRITE {
             ignore_bins ig_bins = binsof(PSEL1) intersect{0}; 
         }
-        PSEL1xPWRITExPADDR: cross PSEL1, PWRITE, PADDR { 
+        PSEL1xPWRITExPADDR: cross PSEL1, PWRITE, _tempPADDR { 
             ignore_bins ig_bins = binsof(PSEL1) intersect{0}; 
         }
 
@@ -481,18 +493,41 @@ class apb_read_seq extends rnd_sequence;
     endfunction
 
     virtual task body();
-        `uvm_info(get_name(), "STARTING READ SEQUENCE", UVM_NONE)
-        repeat(no_of_testcases) begin
-            start_item(trans);
-            //FORCE PWRITE to 0
-            assert(trans.randomize() with { 
-                PWRITE == 0; 
-                PRESETn == 1;
-                PADDR.size() == 1;
-            });
-            finish_item(trans);
-        end
-    endtask
+        `uvm_info(get_name(), "------------------------", UVM_LOW)
+        `uvm_info(get_name(), "seq start: apb_read_seq", UVM_LOW)
+        `uvm_info(get_name(), "------------------------", UVM_LOW)
+        
+    //  SYSTEM RESET
+    `uvm_info(get_name(), "asserting Reset", UVM_MEDIUM)
+    start_item(trans);
+    if(!trans.randomize() with { PRESETn == 0; }) 
+        `uvm_fatal(get_name(), "Reset Randomization Failed")
+    finish_item(trans);
+
+   
+    // random read data
+    `uvm_info(get_name(), " Starting Random Read Bursts", UVM_MEDIUM)
+    
+    repeat(no_of_testcases) begin
+        start_item(trans);
+        
+        // Randomize:
+        // Force PWRITE == 0
+        // PADDR is random here 
+        if(!trans.randomize() with { 
+            PRESETn == 1; 
+            PWRITE  == 0; 
+        }) `uvm_fatal(get_name(), "Read Randomization Failed")
+        `uvm_info(get_name(), trans.convert2string(), UVM_MEDIUM)
+        `uvm_info(get_name(), $sformatf("Driving READ Burst to Addr %0h", trans.PADDR[0]), UVM_HIGH)
+        
+        finish_item(trans);
+    end
+    
+    `uvm_info(get_name(), "----------------------------------", UVM_LOW)
+    `uvm_info(get_name(), "seq completed: apb_read_seq finish", UVM_LOW)
+    `uvm_info(get_name(), "---------------------------------", UVM_LOW)
+endtask
 endclass
 
 /////////////////////////////////////////
@@ -533,7 +568,7 @@ class driver extends uvm_driver#(transaction);
     // driver interface point to make the signals enter the DUT
     virtual APB_intf drv_intf;
     int i;
-    event DRV_DONE;
+    // event DRV_DONE;
 
     //  Constructor: new
     function new(string name, uvm_component parent);
@@ -549,34 +584,6 @@ class driver extends uvm_driver#(transaction);
         // if(!uvm_config_db#(virtual APB_intf.DRV)::get(this, "*", "intf", drv_intf))
         `uvm_fatal(get_name(), "DRIVER cant get interface")
     endfunction: build_phase
-
-    //  Group: Functions -- not being used
-    // //  idle task - IDLE operating state
-    // task idle();
-    //     drv_intf.drv_cb.PSEL1   <= 0;
-    //     drv_intf.drv_cb.PENABLE <= 0;
-    //     // `uvm_info("DRV",$sformatf("IDLE state of FSM. PSEL1 = %b and PENABLE = %b",drv_intf.drv_cb.PSEL1,drv_intf.drv_cb.PENABLE),UVM_NONE);
-    // endtask //idle
-
-    // // setup task - SETUP operating state (Sets all the input for the slave)
-    // task setup();
-    //     // #2;
-    //     drv_intf.drv_cb.PSEL1   <= 1;
-    //     drv_intf.drv_cb.PENABLE <= 1;
-    //     drv_intf.drv_cb.PRESETn <= trans_drv.PRESETn;
-    //     drv_intf.drv_cb.PWRITE  <= trans_drv.PWRITE;
-    //     drv_intf.drv_cb.PWDATA  <= trans_drv.PWDATA[i];
-    //     `uvm_info("DRV",$sformatf("SETUP DATA value now : %0h",trans_drv.PWDATA[i]),UVM_NONE);
-    //     drv_intf.drv_cb.PADDR   <= trans_drv.PADDR[i];
-    //     `uvm_info("DRV",$sformatf("SETUP ADDRESS value now : %0h",trans_drv.PADDR[i]),UVM_NONE);
-    // endtask
-
-    // // access task - ACCESS operating state
-    // task access();
-    //     drv_intf.drv_cb.PSEL1   <= 1;
-    //     drv_intf.drv_cb.PENABLE <= 1;
-    //     // `uvm_info("DRV",$sformatf("ACCESS state of FSM. PSEL1 = %b and PENABLE = %b",drv_intf.drv_cb.PSEL1,drv_intf.drv_cb.PENABLE),UVM_NONE);
-    // endtask
 
     task drive_transfer(int index);
         // 1. SETUP PHASE
@@ -627,7 +634,7 @@ endtask
                 // access();
             end
         end
-        idle();
+        // idle();
     endtask    
 
     //  Function: run_phase
@@ -739,7 +746,6 @@ endclass //monitor extends uvm_monitor
 class ref_model#(parameter DEPTH = 5) extends uvm_component;
     `uvm_component_utils(ref_model)
 
-    // Variables
     const int ram_depth = 2**DEPTH;
     bit [31:0] ram_mem [];  // Memory for DEPTH defined
     
@@ -747,7 +753,7 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
     function new(string name, uvm_component parent);
         super.new(name, parent);
         ram_mem = new[ram_depth];
-        `uvm_info("ref_model","ref_model block got executed",UVM_NONE);
+        `uvm_info("REF_MOD","ref_model execution, depth = 32",UVM_NONE);
     endfunction
 
     // Function: get_ref_val()
@@ -759,8 +765,8 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
         if(trans.PRESETn == 0) begin
             foreach (ram_mem[j]) ram_mem[j] = 32'hffffffff;
             trans.PSLVERR = 0;
-            //trans.PRDATA[0] = 32'b0;
             trans.PREADY = 0;
+            `uvm_info("REF_MOD", "System Reset: Memory Cleared", UVM_LOW)
             return trans;
         end
 
@@ -771,6 +777,8 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
             // if(trans.PADDR[i] >= ram_depth) begin
             // check for word index if more than the memory size
             if(word_index >= ram_depth) begin
+                `uvm_error("REF_MOD", $sformatf("Invalid access Addr:0x%0h (Index:%0d) > Max:%0d", 
+                                                trans.PADDR[i], word_index, ram_depth))
                 trans.PSLVERR = 1;
                 trans.PRDATA[i] = 32'b0;
                 trans.PREADY = 1;
@@ -780,6 +788,7 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
             if(trans.PWRITE == 1) begin
                 // bad data written , turn PSLVERR as 1
                 if(trans.PWDATA[i] === 32'hx || trans.PWDATA[i] === 32'hz ) begin
+                    `uvm_error("REF_MOD", $sformatf("bad data write: Addr:%0h Data:%0h", trans.PADDR[i], trans.PWDATA[i]))
                     trans.PRDATA[i] = 32'b0;
                     trans.PREADY = 1;
                     trans.PSLVERR = 1;
@@ -790,10 +799,14 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
                 trans.PRDATA[i] = 32'b0;
                 trans.PREADY = 1;
                 trans.PSLVERR = 0;
+                `uvm_info("REF_MOD", $sformatf("WRITE | input Bus Addr: %0h -> actual Mem Index in hex: [%0h] | Data Stored: %0h", 
+                                                trans.PADDR[i], word_index, trans.PWDATA[i]), UVM_MEDIUM)
             end
             else begin
                 if(ram_mem[word_index] == 32'hffffffff) begin
-                    /// reading uninitialized memory location is valid in APB, will receive GARBAGE though 
+                    /// reading uninitialized memory location is valid in APB, will receive GARBAGE though
+                    `uvm_warning("REF_MOD", $sformatf("UNINIT READ | Bus Addr: %0h -> Mem Index in hex: [%0h] | Returning Garbage", 
+                                                       trans.PADDR[i], word_index)) 
                     trans.PRDATA[i] = 32'hffffffff;
                     trans.PREADY = 1;
                     trans.PSLVERR = 0;
@@ -802,6 +815,8 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
                 trans.PRDATA[i] = ram_mem [word_index];
                 trans.PREADY = 1;
                 trans.PSLVERR = 0;
+                `uvm_info("REF_MOD", $sformatf("READ | Bus Addr: %0h -> Mem Index in hex: [%0h] | Data Read in hex: %0h", 
+                                                trans.PADDR[i], word_index, trans.PRDATA[i]), UVM_MEDIUM)
             end
         end
         return trans;
@@ -1093,7 +1108,8 @@ module full_tb;
     initial begin
         uvm_config_db#(virtual APB_intf)::set(null, "*", "intf", intf);
         // run_test("base_test");
-        run_test("apb_write_test");
+        // run_test("apb_write_test");
+        run_test("apb_read_test");
     end
 
     initial begin

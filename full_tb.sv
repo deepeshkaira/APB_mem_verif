@@ -531,30 +531,156 @@ endtask
 endclass
 
 /////////////////////////////////////////
-////////////  simultaneous read / write sequence
+////////////  simultaneous read / write sequence for 1 location /////
 ////////////////////////////////////////
 
 class apb_write_read_seq extends rnd_sequence;
     `uvm_object_utils(apb_write_read_seq)
 
+    // send a RESET ,, PRESETn = 0, 
+    // loops through no_of_testcases,
+    // randomize the writing to a memory and reading from the memory
+
     function new(string name="apb_write_read_seq");
         super.new(name);
     endfunction
 
+    bit [31:0] saved_addr;
+    bit [31:0] saved_data;
+
     virtual task body();
-        `uvm_info(get_name(), "STARTING INTERLEAVED SEQ", UVM_NONE)
-        repeat(no_of_testcases) begin
-            start_item(trans);
-            // Allow PWRITE to be 0 or 1 randomly
-            assert(trans.randomize() with { 
-                PRESETn == 1;
-                PADDR.size() == 1; 
-            });
-            finish_item(trans);
-        end
-    endtask
+    `uvm_info(get_name(), "---------------------------------------", UVM_LOW)
+    `uvm_info(get_name(), "seq start: Directed read after write on same location", UVM_LOW)
+    `uvm_info(get_name(), "---------------------------------------", UVM_LOW)
+
+    // Reset
+
+    `uvm_info(get_name(), "asserting Reset", UVM_MEDIUM)
+    start_item(trans);
+    if(!trans.randomize() with { PRESETn == 0; }) 
+        `uvm_fatal(get_name(), "Reset Randomization Failed")
+    finish_item(trans);
+
+
+    // Directed traffic (Write then -> Read then -> Compare)
+
+    `uvm_info(get_name(), "Starting Directed Read After write", UVM_MEDIUM)
+    
+    repeat(no_of_testcases) begin
+        
+
+        // Write to a Random addresses
+
+        start_item(trans);
+        if(!trans.randomize() with { 
+            PRESETn == 1; 
+            PWRITE  == 1;       // Force WRITE
+            PADDR.size() == 1;  // Keep it simple (Single Transfer)
+        }) `uvm_fatal(get_name(), "Write Randomization Failed")
+        
+        // Capture the address and data we just decided to write
+        saved_addr = trans.PADDR[0];
+        saved_data = trans.PWDATA[0];
+        
+        finish_item(trans);
+        
+        `uvm_info(get_name(), $sformatf("Wrote : 0x%0h to Address 0x%0h", saved_data, saved_addr), UVM_HIGH)
+
+        // Read from the same location
+
+        start_item(trans);
+        if(!trans.randomize() with { 
+            PRESETn == 1; 
+            PWRITE  == 0;               // Force READ
+            PADDR.size() == 1;          // Single Transfer
+            PADDR[0] == saved_addr;     // Force Address to read from teh address which was written to earlier
+        }) `uvm_fatal(get_name(), "Read Randomization Failed")
+        
+        finish_item(trans);
+
+        `uvm_info(get_name(), $sformatf("Read from the address 0x%0h (Expecting 0x%0h)", saved_addr, saved_data), UVM_HIGH)
+    end
+    
+    `uvm_info(get_name(), "----------------------------", UVM_LOW)
+    `uvm_info(get_name(), "Seq done: Directed test done", UVM_LOW)
+    `uvm_info(get_name(), "------------------------", UVM_LOW)
+endtask
 endclass
 
+/////////////////////////////////////
+///// write and read from multiple locations /////
+/////////////////////////////////////////////
+
+
+class apb_random_write_read_seq extends rnd_sequence;
+    `uvm_object_utils(apb_random_write_read_seq)
+
+    // send a RESET ,, PRESETn = 0, 
+    // loops through no_of_testcases,
+    // randomize the writing to a memory and reading from the memory
+
+    function new(string name="apb_random_write_read_seq");
+        super.new(name);
+    endfunction
+
+    bit [31:0] captured_addr []; // array to hold generated write addresses
+    bit [31:0] captured_data [];
+
+    virtual task body();
+    `uvm_info(get_name(), "---------------------------------------", UVM_LOW)
+    `uvm_info(get_name(), "seq start: random write and read sequence", UVM_LOW)
+    `uvm_info(get_name(), "---------------------------------------", UVM_LOW)
+
+    // Reset
+
+    `uvm_info(get_name(), "asserting Reset", UVM_MEDIUM)
+    start_item(trans);
+    if(!trans.randomize() with { PRESETn == 0; }) 
+        `uvm_fatal(get_name(), "Reset Randomization Failed")
+    finish_item(trans);
+
+
+    // Directed traffic (Write then -> Read then -> Compare)
+
+    `uvm_info(get_name(), "Starting random Read After write", UVM_MEDIUM)
+    
+    repeat(no_of_testcases) begin
+        
+
+        // Write to a Random addresses as defined by the randomized address values
+
+        start_item(trans);
+        if(!trans.randomize() with { 
+            PRESETn == 1; 
+            PWRITE  == 1;       // Force WRITE
+        }) `uvm_fatal(get_name(), "Write Randomization Failed")
+                
+        captured_addr = trans.PADDR;
+        captured_data = trans.PWDATA;
+        finish_item(trans);
+
+        /// read from random addresses
+
+        start_item(trans);
+        if(!trans.randomize() with { 
+            PRESETn == 1; 
+            PWRITE  == 0;               // Force READ
+
+            PADDR.size() == captured_addr.size();
+            foreach(PADDR[i]) {
+                PADDR[i] == captured_addr[i];
+            }
+        }) `uvm_fatal(get_name(), "Read Randomization Failed")
+        
+        finish_item(trans);
+
+    end
+    
+    `uvm_info(get_name(), "----------------------------", UVM_LOW)
+    `uvm_info(get_name(), "Seq done: random write and read sequence", UVM_LOW)
+    `uvm_info(get_name(), "------------------------", UVM_LOW)
+endtask
+endclass
 
 ///////////////////////////////////////
 //////////// MY DRIVER /////////////
@@ -1083,6 +1209,25 @@ class apb_comprehensive_test extends base_test;
         
         rw_seq = apb_write_read_seq::type_id::create("rw_seq");
         rw_seq.start(env.agnt.seqr); // Start the MIXED sequence
+        
+        phase.drop_objection(this);
+    endtask
+endclass
+
+class apb_random_write_read_test extends base_test;
+    `uvm_component_utils(apb_random_write_read_test)
+
+    apb_random_write_read_seq rw_seq;
+
+    function new(string name, uvm_component parent);
+        super.new(name, parent);
+    endfunction
+
+    task run_phase(uvm_phase phase);
+        phase.raise_objection(this);
+        
+        rw_seq = apb_random_write_read_seq::type_id::create("rw_seq");
+        rw_seq.start(env.agnt.seqr); 
         
         phase.drop_objection(this);
     endtask

@@ -654,7 +654,9 @@ class apb_random_write_read_seq extends rnd_sequence;
             PRESETn == 1; 
             PWRITE  == 1;       // Force WRITE
         }) `uvm_fatal(get_name(), "Write Randomization Failed")
-                
+        `uvm_info(get_name(), trans.convert2string(), UVM_MEDIUM)
+        `uvm_info(get_name(), $sformatf(" Write Burst Address with Size: %0d, Burst DATA with size : %0d ", trans.PADDR.size(), trans.PWDATA.size()), UVM_HIGH)
+
         captured_addr = trans.PADDR;
         captured_data = trans.PWDATA;
         finish_item(trans);
@@ -755,9 +757,6 @@ endtask
             @(drv_intf.drv_cb);
             for(i=0; i<trans_drv.PADDR.size(); i++) begin
                 drive_transfer(i);
-                // setup();
-                // @(drv_intf.drv_cb);
-                // access();
             end
         end
         // idle();
@@ -811,7 +810,6 @@ class monitor extends uvm_monitor;
         ap = new("ap", this);
         trans = new("sam_trans");
     endfunction: build_phase
-    // extern function void build_phase(uvm_phase phase);
     
     //  Function: run_phase
     task run_phase(uvm_phase phase);
@@ -822,7 +820,7 @@ class monitor extends uvm_monitor;
         join
         `uvm_info(get_name(), $sformatf("pck_complete: %b, PSEL1: %b", pck_complete, intf.mon_cb.PSEL1), UVM_HIGH)
         if((pck_complete && !intf.mon_cb.PSEL1) || !intf.mon_cb.PRESETn) begin
-            `uvm_info(get_name(), $sformatf("Sampled Packet is: %s", trans.convert2string()), UVM_HIGH)
+            `uvm_info(get_name(), $sformatf("Sampled Packet is: %s", trans.convert2string()), UVM_NONE)
             ap.write(trans);
             trans = new("sam_trans");
             ip_pntr = 0;
@@ -831,7 +829,6 @@ class monitor extends uvm_monitor;
         end
     end
     endtask: run_phase
-    // extern task run_phase(uvm_phase phase);
 
     //   Method definitionss
 
@@ -862,7 +859,7 @@ class monitor extends uvm_monitor;
     endtask
 
 
-endclass //monitor extends uvm_monitor
+endclass
 
 ///////////////////////////////////////
 //////////// MY REFERENCE MODEL ///////
@@ -965,7 +962,23 @@ class scoreboard extends uvm_scoreboard;
     transaction act_trans, exp_trans;
     int passCnt, failCnt;
     
-    // Function:check()
+    // constrctr
+    function new(string name, uvm_component parent);
+        super.new(name, parent);
+        `uvm_info("SCB","scoreboard constructor got executed",UVM_NONE);
+    endfunction
+
+    //  build_phase
+    virtual function void build_phase(uvm_phase phase);
+        super.build_phase(phase);
+        rm = ref_model#()::type_id::create("rm", this);
+        act_trans = new("act_trans");
+        ap_exp = new("ap_exp", this);
+        `uvm_info("SCB","scoreboard build_phase block got executed",UVM_NONE);
+    endfunction: build_phase
+
+
+    // Function - check()
     function void check();
         if(act_trans.compare(exp_trans)) begin
             `uvm_info("SCB", $sformatf("%s\nStatus -> TEST___PASSED", act_trans.convert2string()), UVM_NONE)
@@ -980,27 +993,21 @@ class scoreboard extends uvm_scoreboard;
         end
     endfunction
 
-    // Fuction: write()
-    function void write(transaction trans);
+    // Fuction - right
+    virtual function void write(transaction trans);
+
+        // Reset -> active low || PSEL1 =0 , do not check now as it is either in reset or PSEL = 0(Invalid txn)
+        if (trans.PRESETn == 0 || trans.PSEL1 == 0) begin
+            `uvm_info("SCB", "Skipping Scoreboard check now since, the DUT is in Reset OROR ignor now since PSEL = 0, no txn", UVM_HIGH)
+        return;
+        end
+
+        // process the valid txn and generate the expected transaction from ref model
         act_trans.copy(trans);
         exp_trans = rm.get_ref_val(trans);
+
         check();
     endfunction
-
-    // Constructor: new
-    function new(string name, uvm_component parent);
-        super.new(name, parent);
-        `uvm_info("scoreboard","scoreboard constructor got executed",UVM_NONE);
-    endfunction
-
-    //  Function: build_phase
-    virtual function void build_phase(uvm_phase phase);
-        super.build_phase(phase);
-        rm = ref_model#()::type_id::create("rm", this);
-        act_trans = new("act_trans");
-        ap_exp = new("ap_exp", this);
-        `uvm_info("scoreboard","scoreboard build_phase block got executed",UVM_NONE);
-    endfunction: build_phase
 
 endclass
 
@@ -1133,7 +1140,7 @@ class base_test extends uvm_test;
         // setting here a handle so that classes inside agent can access the agent_config block from here.
         uvm_config_db#(agent_config)::set(this, "env.agnt.*", "agnt_cfg", agnt_cfg);
         /// set the number of cases for the design from the base_test
-        uvm_config_db#(int)::set(null, "seq.*", "no_cases", 10);
+        uvm_config_db#(int)::set(null, "seq.*", "no_cases", 1000);
         
         // seq = new();
         env = environment::type_id::create("env", this);
@@ -1266,3 +1273,4 @@ module full_tb;
     end
 
 endmodule
+

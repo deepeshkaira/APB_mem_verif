@@ -25,7 +25,7 @@ interface APB_intf (input logic clk);
         logic PSEL1;
     
         // this is how we are going to tell the design what ports to be considered as input or output
-        // at certain instance of time.
+        // at certain instance of time from and to driver port.
         clocking drv_cb @(posedge clk);
             output PWRITE, PWDATA, PADDR, PENABLE, PRESETn, PSEL1;
             input PREADY; 
@@ -496,19 +496,21 @@ class apb_read_seq extends rnd_sequence;
         `uvm_info(get_name(), "------------------------", UVM_LOW)
         `uvm_info(get_name(), "seq start: apb_read_seq", UVM_LOW)
         `uvm_info(get_name(), "------------------------", UVM_LOW)
-        
-    //  SYSTEM RESET
-    `uvm_info(get_name(), "asserting Reset", UVM_MEDIUM)
-    start_item(trans);
-    if(!trans.randomize() with { PRESETn == 0; }) 
-        `uvm_fatal(get_name(), "Reset Randomization Failed")
-    finish_item(trans);
+
 
    
     // random read data
     `uvm_info(get_name(), " Starting Random Read Bursts", UVM_MEDIUM)
     
     repeat(no_of_testcases) begin
+
+        //  SYSTEM RESET
+        `uvm_info(get_name(), "asserting Reset", UVM_MEDIUM)
+        start_item(trans);
+        if(!trans.randomize() with { PRESETn == 0; }) 
+            `uvm_fatal(get_name(), "Reset Randomization Failed")
+        finish_item(trans);
+
         start_item(trans);
         
         // Randomize:
@@ -553,13 +555,6 @@ class apb_write_read_seq extends rnd_sequence;
     `uvm_info(get_name(), "seq start: Directed read after write on same location", UVM_LOW)
     `uvm_info(get_name(), "---------------------------------------", UVM_LOW)
 
-    // Reset
-
-    `uvm_info(get_name(), "asserting Reset", UVM_MEDIUM)
-    start_item(trans);
-    if(!trans.randomize() with { PRESETn == 0; }) 
-        `uvm_fatal(get_name(), "Reset Randomization Failed")
-    finish_item(trans);
 
 
     // Directed traffic (Write then -> Read then -> Compare)
@@ -568,6 +563,14 @@ class apb_write_read_seq extends rnd_sequence;
     
     repeat(no_of_testcases) begin
         
+        
+        // Reset
+
+        `uvm_info(get_name(), "asserting Reset", UVM_MEDIUM)
+        start_item(trans);
+        if(!trans.randomize() with { PRESETn == 0; }) 
+            `uvm_fatal(get_name(), "Reset Randomization Failed")
+        finish_item(trans);
 
         // Write to a Random addresses
 
@@ -631,14 +634,6 @@ class apb_random_write_read_seq extends rnd_sequence;
     `uvm_info(get_name(), "seq start: random write and read sequence", UVM_LOW)
     `uvm_info(get_name(), "---------------------------------------", UVM_LOW)
 
-    // Reset
-
-    `uvm_info(get_name(), "asserting Reset", UVM_MEDIUM)
-    start_item(trans);
-    if(!trans.randomize() with { PRESETn == 0; }) 
-        `uvm_fatal(get_name(), "Reset Randomization Failed")
-    finish_item(trans);
-
 
     // Directed traffic (Write then -> Read then -> Compare)
 
@@ -646,13 +641,20 @@ class apb_random_write_read_seq extends rnd_sequence;
     
     repeat(no_of_testcases) begin
         
+        // Reset
+
+        `uvm_info(get_name(), "asserting Reset", UVM_MEDIUM)
+        start_item(trans);
+        if(!trans.randomize() with { trans.PRESETn == 0; }) 
+            `uvm_fatal(get_name(), "Reset Randomization Failed")
+        finish_item(trans);
 
         // Write to a Random addresses as defined by the randomized address values
 
         start_item(trans);
         if(!trans.randomize() with { 
-            PRESETn == 1; 
-            PWRITE  == 1;       // Force WRITE
+            trans.PRESETn == 0; 
+            trans.PWRITE  == 1;       // Force WRITE
         }) `uvm_fatal(get_name(), "Write Randomization Failed")
         `uvm_info(get_name(), trans.convert2string(), UVM_MEDIUM)
         `uvm_info(get_name(), $sformatf(" Write Burst Address with Size: %0d, Burst DATA with size : %0d ", trans.PADDR.size(), trans.PWDATA.size()), UVM_HIGH)
@@ -661,7 +663,7 @@ class apb_random_write_read_seq extends rnd_sequence;
         captured_data = trans.PWDATA;
         finish_item(trans);
 
-        /// read from random addresses
+        /// read from saved addresses
 
         start_item(trans);
         if(!trans.randomize() with { 
@@ -738,7 +740,7 @@ class driver extends uvm_driver#(transaction);
         end
 
         // 3. IDLE
-        // ccan Drop Select and Enable as txn is finished
+        // can Drop Select and Enable as txn is finished
         drv_intf.drv_cb.PSEL1   <= 0;
         drv_intf.drv_cb.PENABLE <= 0;
 endtask
@@ -746,14 +748,16 @@ endtask
     // drive task - Switches b/w different operating states
     task drive();
         if(!trans_drv.PRESETn) begin
-            
+            `uvm_info("DRV_RESET_GIVEN","Driver is given reset for to the system",UVM_NONE);
             @(drv_intf.drv_cb);
-            drv_intf.drv_cb.PRESETn <= trans_drv.PRESETn;
+            
+            drv_intf.drv_cb.PRESETn <= 0;
             @(drv_intf.drv_cb);
             // #10;
             drv_intf.drv_cb.PRESETn <= 1;
         end
         else begin
+            `uvm_info("DRV_RESET_VALUE_CHECK",$sformatf("Value of reset in the design %0b",trans_drv.PRESETn),UVM_NONE);
             @(drv_intf.drv_cb);
             for(i=0; i<trans_drv.PADDR.size(); i++) begin
                 drive_transfer(i);
@@ -893,56 +897,60 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
             return trans;
         end
 
-        for(int i=0; i<trans.PADDR.size(); i++) begin
+        else if(trans.PRESETn == 1) begin
+            for(int i=0; i<trans.PADDR.size(); i++) begin
 
-            word_index = trans.PADDR[i] >> 2; /// ignoring the last 2 bit values here given from the APB MASTER (convert byte addressing to word addressing so that no memory locatuons are left behind)
-
-            // if(trans.PADDR[i] >= ram_depth) begin
-            // check for word index if more than the memory size
-            if(word_index >= ram_depth) begin
-                `uvm_error("REF_MOD", $sformatf("Invalid access Addr:0x%0h (Index:%0d) > Max:%0d", 
-                                                trans.PADDR[i], word_index, ram_depth))
-                trans.PSLVERR = 1;
-                trans.PRDATA[i] = 32'b0;
-                trans.PREADY = 1;
-                continue;
-            end
-
-            if(trans.PWRITE == 1) begin
-                // bad data written , turn PSLVERR as 1
-                if(trans.PWDATA[i] === 32'hx || trans.PWDATA[i] === 32'hz ) begin
-                    `uvm_error("REF_MOD", $sformatf("bad data write: Addr:%0h Data:%0h", trans.PADDR[i], trans.PWDATA[i]))
+                word_index = trans.PADDR[i] >> 2; /// ignoring the last 2 bit values here given from the APB MASTER (convert byte addressing to word addressing so that no memory locatuons are left behind)
+    
+                // if(trans.PADDR[i] >= ram_depth) begin
+                // check for word index if more than the memory size
+                if(word_index >= ram_depth) begin
+                    `uvm_error("REF_MOD", $sformatf("Invalid access Addr:0x%0h (Index:%0d) > Max:%0d", 
+                                                    trans.PADDR[i], word_index, ram_depth))
+                    trans.PSLVERR = 1;
                     trans.PRDATA[i] = 32'b0;
                     trans.PREADY = 1;
-                    trans.PSLVERR = 1;
                     continue;
                 end
-                // else write full 32 bit data in the memory location calculated
-                ram_mem [word_index] = trans.PWDATA[i];
-                trans.PRDATA[i] = 32'b0;
-                trans.PREADY = 1;
-                trans.PSLVERR = 0;
-                `uvm_info("REF_MOD", $sformatf("WRITE | input Bus Addr: %0h -> actual Mem Index in hex: [%0h] | Data Stored: %0h", 
-                                                trans.PADDR[i], word_index, trans.PWDATA[i]), UVM_MEDIUM)
-            end
-            else begin
-                if(ram_mem[word_index] == 32'hffffffff) begin
-                    /// reading uninitialized memory location is valid in APB, will receive GARBAGE though
-                    `uvm_warning("REF_MOD", $sformatf("UNINIT READ | Bus Addr: %0h -> Mem Index in hex: [%0h] | Returning Garbage", 
-                                                       trans.PADDR[i], word_index)) 
-                    trans.PRDATA[i] = 32'hffffffff;
+    
+                if(trans.PWRITE == 1) begin
+                    // bad data written , turn PSLVERR as 1
+                    if(trans.PWDATA[i] === 32'hx || trans.PWDATA[i] === 32'hz ) begin
+                        `uvm_error("REF_MOD", $sformatf("bad data write: Addr:%0h Data:%0h", trans.PADDR[i], trans.PWDATA[i]))
+                        trans.PRDATA[i] = 32'b0;
+                        trans.PREADY = 1;
+                        trans.PSLVERR = 1;
+                        continue;
+                    end
+                    // else write full 32 bit data in the memory location calculated
+                    ram_mem [word_index] = trans.PWDATA[i];
+                    trans.PRDATA[i] = 32'b0;
                     trans.PREADY = 1;
                     trans.PSLVERR = 0;
-                    continue;
+                    `uvm_info("REF_MOD", $sformatf("WRITE | input Bus Addr: %0h -> actual Mem Index in hex: [%0h] | Data Stored: %0h", 
+                                                    trans.PADDR[i], word_index, trans.PWDATA[i]), UVM_MEDIUM)
                 end
-                trans.PRDATA[i] = ram_mem [word_index];
-                trans.PREADY = 1;
-                trans.PSLVERR = 0;
-                `uvm_info("REF_MOD", $sformatf("READ | Bus Addr: %0h -> Mem Index in hex: [%0h] | Data Read in hex: %0h", 
-                                                trans.PADDR[i], word_index, trans.PRDATA[i]), UVM_MEDIUM)
+                else begin
+                    if(ram_mem[word_index] == 32'hffffffff) begin
+                        /// reading uninitialized memory location is valid in APB, will receive GARBAGE though
+                        `uvm_warning("REF_MOD", $sformatf("UNINIT READ | Bus Addr: %0h -> Mem Index in hex: [%0h] | Returning Garbage", 
+                                                           trans.PADDR[i], word_index)) 
+                        trans.PRDATA[i] = 32'hffffffff;
+                        trans.PREADY = 1;
+                        trans.PSLVERR = 0;
+                        continue;
+                    end
+                    trans.PRDATA[i] = ram_mem [word_index];
+                    trans.PREADY = 1;
+                    trans.PSLVERR = 0;
+                    `uvm_info("REF_MOD", $sformatf("READ | Bus Addr: %0h -> Mem Index in hex: [%0h] | Data Read in hex: %0h", 
+                                                    trans.PADDR[i], word_index, trans.PRDATA[i]), UVM_MEDIUM)
+                end
             end
+            return trans;
         end
-        return trans;
+
+       
     endfunction
 
 
@@ -993,19 +1001,25 @@ class scoreboard extends uvm_scoreboard;
         end
     endfunction
 
-    // Fuction - right
-    virtual function void write(transaction trans);
-
+    // Fuction - write
+    virtual function void write(transaction trans)
+       
         // Reset -> active low || PSEL1 =0 , do not check now as it is either in reset or PSEL = 0(Invalid txn)
-        if (trans.PRESETn == 0 || trans.PSEL1 == 0) begin
-            `uvm_info("SCB", "Skipping Scoreboard check now since, the DUT is in Reset OROR ignor now since PSEL = 0, no txn", UVM_HIGH)
-        return;
+        // if (trans.PRESETn == 0 || trans.PSEL1 == 0) begin
+
+        // adding this here so that Empty packets can be ignore for testing
+        if(trans.PADDR.size() == 0) begin
+                `uvm_info("SCB","Incoming packet is empty, SKIPPING",UVM_NONE)
         end
 
-        // process the valid txn and generate the expected transaction from ref model
+        // added this for extra safety where PRESETn and PSEL1 are not equal to one, they maybe 0,X,Z
+        if (!(trans.PRESETn == 0) || !(trans.PSEL1 == 0)) begin
+            `uvm_info("SCB", "Skipping Scoreboard check now since, the DUT is in Reset OROR ignor now since PSEL = 0, no txn", UVM_NONE)
+            return;
+        end
+
         act_trans.copy(trans);
         exp_trans = rm.get_ref_val(trans);
-
         check();
     endfunction
 

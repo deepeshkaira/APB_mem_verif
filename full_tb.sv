@@ -350,7 +350,7 @@ class fun_cov extends uvm_subscriber#(transaction);
             _tempPADDR = trans.PADDR[j];
             /// this is to sample the incoming data to check coverage
             apb_cg.sample();
-            `uvm_info("COV",$sformatf("this is coverage sample number %0d",j),UVM_NONE);
+            // `uvm_info("COV",$sformatf("this is coverage sample number %0d",j),UVM_NONE);
         end
     endfunction
 
@@ -817,7 +817,8 @@ class monitor extends uvm_monitor;
     
     //  Function: run_phase
     task run_phase(uvm_phase phase);
-    forever begin
+   
+/*    forever begin
         fork
             ip_mon();
             op_mon();
@@ -833,11 +834,48 @@ class monitor extends uvm_monitor;
         end
     end
     endtask: run_phase
+    */
+    forever begin
+        fork
+            ip_mon();
+            op_mon();
+        join
+        
+        // If Reset is Active Low, discard current data 
 
-    //   Method definitionss
+        if(!intf.mon_cb.PRESETn) begin
+             `uvm_info(get_name(), "Monitor detected RESET. Clearing internal state.", UVM_HIGH)
+             trans = new("sam_trans"); 
+             ip_pntr = 0;
+             op_pntr = 0;
+             pck_complete = 0;
+             sampled = 0;
+             
+            //  wait(intf.mon_cb.PRESETn == 1);
+        end
+
+        // Only send if the packet is complete AND the bus has gone idle (PSEL=0), and DATA read happened with PRDATA coming out from DUT.
+        // else if(pck_complete && !intf.mon_cb.PSEL1 && intf.mon_cb.PWRITE == 0 ) begin    // if we use this then it will accumulate the PADDR and PWDATA value for both read and write , while displaying for READ txn
+        else if(pck_complete && !intf.mon_cb.PSEL1) begin
+            `uvm_info(get_name(), $sformatf("Sampled Packet is: %s", trans.convert2string()), UVM_NONE)
+            `uvm_info("MON_CHAN",$sformatf("This is some data %0p", trans.PRDATA),UVM_NONE)
+            ap.write(trans);
+            
+            // Prepare for next packet
+            trans = new("sam_trans");
+            ip_pntr = 0;
+            op_pntr = 0;
+            pck_complete = 0;
+        end
+    end
+endtask: run_phase
+
+
+    //   Method definitions
 
     task ip_mon();
         @(intf.mon_cb);
+        // if(intf.mon_cb.PENABLE == 1 && intf.mon_cb.PRESETn == 1 && !sampled) begin
         if(intf.mon_cb.PENABLE == 1 && !sampled) begin
             trans.PWRITE    = intf.mon_cb.PWRITE;
             trans.PSEL1     = intf.mon_cb.PSEL1;
@@ -848,12 +886,13 @@ class monitor extends uvm_monitor;
             ip_pntr++;
             sampled = 1;
         end
-        if(intf.mon_cb.PENABLE == 0) sampled = 0;
+        if(intf.mon_cb.PENABLE == 0 && intf.mon_cb.PSEL1 == 0 ) sampled = 0;
     endtask
 
     task op_mon();
         @(intf.mon_cb);
-        if(intf.mon_cb.PREADY == 1 && intf.mon_cb.PENABLE == 1) begin
+        // if(intf.mon_cb.PREADY == 1 && intf.mon_cb.PENABLE == 1 && intf.mon_cb.PSEL1 == 1 && intf.mon_cb.PRESETn == 1) begin
+        if(intf.mon_cb.PREADY == 1 && intf.mon_cb.PENABLE == 1 ) begin
             trans.PREADY = intf.mon_cb.PREADY;
             trans.PSLVERR = intf.mon_cb.PSLVERR;
             trans.PRDATA[op_pntr]  = intf.mon_cb.PRDATA;
@@ -949,8 +988,7 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
             end
             return trans;
         end
-
-       
+      
     endfunction
 
 
@@ -1020,9 +1058,12 @@ class scoreboard extends uvm_scoreboard;
         end
 
         // go ahead with check
-        act_trans.copy(trans);
-        exp_trans = rm.get_ref_val(trans);
-        check();
+        if(trans.PADDR.size() != 0) begin
+            act_trans.copy(trans);
+            exp_trans = rm.get_ref_val(trans);
+            check();            
+        end
+
     endfunction
 
 endclass
@@ -1286,8 +1327,7 @@ module full_tb;
         $dumpfile("dump.vcd");
         $dumpvars;
         $assertvacuousoff(0);
-      	// #1350;
-        // $finish();
+      	
     end
 
 endmodule

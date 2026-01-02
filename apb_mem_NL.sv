@@ -59,7 +59,7 @@ module apb_mem_NL #(parameter DEPTH = 5) (
 // ADDRESSING NOTE: APB is Byte-Addressable, Memory is Word-Indexed (32-bit).
 // We discard the lower 2 bits (byte offset) to convert Byte Addr -> Word Index.
 //
-// Example:
+// Example: (go through this to get rid of confusion)
 //   PADDR = 0x00 -> Index 0  (mem[0])
 //   PADDR = 0x04 -> Index 1  (mem[1])
 //   PADDR = 0x08 -> Index 2  (mem[2])

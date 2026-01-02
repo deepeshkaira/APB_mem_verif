@@ -146,7 +146,7 @@ endclass
 ///////////////////////////////////////	
 
 class transaction extends uvm_sequence_item;
-    //`uvm_object_utils(transaction);     // removing this to register the variables individually.
+    `uvm_object_utils(transaction);
 
     //  Vars  declration
     static bit [9:0] p_id;      // Packet id
@@ -157,28 +157,13 @@ class transaction extends uvm_sequence_item;
     rand bit PRESETn;
     // bit PRESETn;
     
-    // rand bit error_case;        // To generate random error case
-    rand bit PSEL1;
+    rand bit error_case;        // To generate random error case
+    bit PSEL1;
     bit PENABLE;
 
     bit PREADY;
     bit [31:0] PRDATA [int];
     bit PSLVERR;
-
-    // register the varibles here for using the inbuilt functions like copy, compare etc etc
-    `uvm_object_utils_begin(transaction)
-        `uvm_field_int(PWRITE, UVM_ALL_ON)
-        `uvm_field_int(PSEL1, UVM_ALL_ON)
-        `uvm_field_int(PENABLE, UVM_ALL_ON)
-        `uvm_field_int(PRESETn, UVM_ALL_ON)
-        `uvm_field_int(PSLVERR, UVM_ALL_ON)
-        `uvm_field_int(PREADY, UVM_ALL_ON)
-        
-        // array macros for array vars
-        `uvm_field_array_int(PADDR, UVM_ALL_ON)
-        `uvm_field_array_int(PWDATA, UVM_ALL_ON)
-        `uvm_field_array_int(PRDATA, UVM_ALL_ON)
-    `uvm_object_utils_end
 
     // Constraints
     // if PRESETn is 0;  data and address size = 1
@@ -365,7 +350,7 @@ class fun_cov extends uvm_subscriber#(transaction);
             _tempPADDR = trans.PADDR[j];
             /// this is to sample the incoming data to check coverage
             apb_cg.sample();
-            // `uvm_info("COV",$sformatf("this is coverage sample number %0d",j),UVM_NONE);
+            //`uvm_info("COV",$sformatf("this is coverage sample number %0d",j),UVM_NONE);
         end
     endfunction
 
@@ -400,63 +385,32 @@ class rnd_sequence extends uvm_sequence;
     //  Group: Variables
     transaction trans;
     int no_of_testcases;
-    virtual APB_intf intf;
 
     //  Constructor: new
     function new(string name = "rnd_seq");
         super.new(name);
         trans = transaction::type_id::create("trans");
-        // get number of cases here
         if(!uvm_config_db#(int)::get(null, "seq.", "no_cases", no_of_testcases)) begin
             `uvm_warning(get_name(), "Cant get no of testcases, Using default no of test cases = 10")
             // just in case there is an issue in recieving the number of testcases from config_db
             no_of_testcases = 10;
         end
-
-        // get the interface here from config db
-        if(!uvm_config_db#(virtual APB_intf)::get(null, "env.agnt.*", "intf", intf)) begin
-            `uvm_info("SEQ", "Interface handle not found", UVM_LOW)
-       end
-    endfunction
-
-    // reset task
-    virtual task reset_dut();
-        `uvm_info(get_name(), " Asserting System RESET", UVM_NONE)
-        
-        start_item(trans);        
-        trans.PRESETn = 0;    
-        trans.PWRITE  = 0;    
-        trans.PSEL1   = 0;    
-        trans.PENABLE = 0;
-        
-        // Initialize Dynamic Arrays here because now I am manually driving these values for those variables.
-        // Since I am not randomizing, I must allocate memory manually.
-        trans.PADDR   = new[1]; 
-        trans.PWDATA  = new[1];
-        
-        // Set Data/Addr to 0
-        trans.PADDR[0]  = 32'h0;
-        trans.PWDATA[0] = 32'h0;       
-        finish_item(trans);
-        
-        `uvm_info(get_name(), " System RESET Complete.", UVM_NONE)
-    endtask
+    endfunction: new
 
     //  Task: pre_body
     //  This task is a user-definable callback that is called before the execution 
     //  of <body> only when the sequence is started with <start>.
     //  If <start> is called with ~call_pre_post~ set to 0, ~pre_body~ is not called.
     
-    // virtual task pre_body();
-    //     start_item(trans);
-    //     `uvm_info("rnd_sequence",$sformatf("Running pre-body at time %0t",$realtime),UVM_NONE)
-    //     trans.p_id = 1;
-    //     trans.f_id = 5; 
-    //     // trans.PRESETn = 0;
-    //     trans.PADDR = {32'h0};
-    //     trans.PWDATA = {32'h0};
-    //     finish_item(trans);
-    // endtask
+    virtual task pre_body();
+        start_item(trans);
+        trans.p_id = 1;
+        trans.f_id = 5; 
+        trans.PRESETn = 0;
+        trans.PADDR = {32'h0};
+        trans.PWDATA = {32'h0};
+        finish_item(trans);
+    endtask
 
     //  Task: body
     //  This is the user-defined task where the main sequence code is written
@@ -465,9 +419,12 @@ class rnd_sequence extends uvm_sequence;
         `uvm_info("rnd_sequence","rnd_sequence block got executed",UVM_NONE);
         for (int i = 0; i < no_of_testcases-1; i++) begin
             start_item(trans);
+            // start the randomization and transactions.
+            // asks the sequencer for permission to send the data
             if(!trans.randomize())
                 `uvm_fatal(get_name(), "Randomization failed");
-
+            // `uvm_info(get_name(), trans.convert2string(), UVM_MEDIUM)
+           // `uvm_info("rnd_sequence","task body executed",UVM_NONE)
             finish_item(trans);
             `uvm_info("rnd_sequence",$sformatf("executed test case number : %0d",i),UVM_NONE)
         end
@@ -492,7 +449,13 @@ class apb_write_seq extends rnd_sequence;
         `uvm_info(get_name(), "-----------------------------", UVM_LOW)
 
         // SYSTEM RESET
-        reset_dut();
+        `uvm_info(get_name(), "[PHASE 1] Asserting Reset", UVM_MEDIUM)
+        start_item(trans);
+        if(!trans.randomize() with { 
+            PRESETn == 0; 
+            }) `uvm_fatal(get_name(), "Randomization Failed during Reset Phase")
+        finish_item(trans);
+
 
         // RANDOM WRITE TRAFFIC
         `uvm_info(get_name(), " Starting Random Write Bursts", UVM_MEDIUM)
@@ -535,36 +498,43 @@ class apb_read_seq extends rnd_sequence;
         `uvm_info(get_name(), "seq start: apb_read_seq", UVM_LOW)
         `uvm_info(get_name(), "------------------------", UVM_LOW)
 
-                //  SYSTEM RESET
-        reset_dut();
+
    
-        // random read data
-        `uvm_info(get_name(), " Starting Random Read Bursts", UVM_MEDIUM)
-        
-        repeat(no_of_testcases) begin
+    // random read data
+    `uvm_info(get_name(), " Starting Random Read Bursts", UVM_MEDIUM)
+    
+    repeat(no_of_testcases) begin
 
-            start_item(trans);
-            // Randomize: force PWRITE == 0
-            // PADDR is random here 
-            if(!trans.randomize() with { 
-                PRESETn == 1; 
-                PWRITE  == 0; 
-            }) `uvm_fatal(get_name(), "Read Randomization Failed")
-            `uvm_info(get_name(), trans.convert2string(), UVM_MEDIUM)
-            `uvm_info(get_name(), $sformatf("Driving READ Burst to Addr %0h", trans.PADDR[0]), UVM_HIGH)
-            
-            finish_item(trans);
-        end
-        
-        `uvm_info(get_name(), "----------------------------------", UVM_LOW)
-        `uvm_info(get_name(), "seq completed: apb_read_seq finish", UVM_LOW)
-        `uvm_info(get_name(), "---------------------------------", UVM_LOW)
-    endtask
+        //  SYSTEM RESET
+        `uvm_info(get_name(), "asserting Reset", UVM_MEDIUM)
+        start_item(trans);
+        if(!trans.randomize() with { PRESETn == 0; }) 
+            `uvm_fatal(get_name(), "Reset Randomization Failed")
+        finish_item(trans);
 
+        start_item(trans);
+        
+        // Randomize:
+        // Force PWRITE == 0
+        // PADDR is random here 
+        if(!trans.randomize() with { 
+            PRESETn == 1; 
+            PWRITE  == 0; 
+        }) `uvm_fatal(get_name(), "Read Randomization Failed")
+        `uvm_info(get_name(), trans.convert2string(), UVM_MEDIUM)
+        `uvm_info(get_name(), $sformatf("Driving READ Burst to Addr %0h", trans.PADDR[0]), UVM_HIGH)
+        
+        finish_item(trans);
+    end
+    
+    `uvm_info(get_name(), "----------------------------------", UVM_LOW)
+    `uvm_info(get_name(), "seq completed: apb_read_seq finish", UVM_LOW)
+    `uvm_info(get_name(), "---------------------------------", UVM_LOW)
+endtask
 endclass
 
 /////////////////////////////////////////
-////////////  simultaneous read / write sequence for  ONLY 1 LOCATION /////
+////////////  simultaneous read / write sequence for 1 location /////
 ////////////////////////////////////////
 
 class apb_write_read_seq extends rnd_sequence;
@@ -595,10 +565,16 @@ class apb_write_read_seq extends rnd_sequence;
     repeat(no_of_testcases) begin
         
         
-        // Reset9
-        reset_dut();
+        // Reset
+
+        `uvm_info(get_name(), "asserting Reset", UVM_MEDIUM)
+        start_item(trans);
+        if(!trans.randomize() with { PRESETn == 0; }) 
+            `uvm_fatal(get_name(), "Reset Randomization Failed")
+        finish_item(trans);
 
         // Write to a Random addresses
+
         start_item(trans);
         if(!trans.randomize() with { 
             PRESETn == 1; 
@@ -655,61 +631,58 @@ class apb_random_write_read_seq extends rnd_sequence;
     bit [31:0] captured_data [];
 
     virtual task body();
-            `uvm_info(get_name(), "---------------------------------------", UVM_LOW)
-            `uvm_info(get_name(), "seq start: random write and read sequence", UVM_LOW)
-            `uvm_info(get_name(), "---------------------------------------", UVM_LOW)
+    `uvm_info(get_name(), "---------------------------------------", UVM_LOW)
+    `uvm_info(get_name(), "seq start: random write and read sequence", UVM_LOW)
+    `uvm_info(get_name(), "---------------------------------------", UVM_LOW)
 
-            // Reset
-            reset_dut();
+    // Directed traffic (Write then -> Read then -> Compare)
 
-            // Directed traffic (Write then -> Read then -> Compare)
-
-            `uvm_info(get_name(), "Starting random Read After write", UVM_MEDIUM)
-            
-            repeat(no_of_testcases) begin
-
-                // Write to a Random addresses as defined by the randomized address values
-
-                start_item(trans);
-                if(!trans.randomize() with { 
-                    PRESETn == 1; 
-                    PWRITE  == 1;       // Force to WRITE
-                }) `uvm_fatal(get_name(), "Write Randomization Failed")
-                `uvm_info(get_name(), trans.convert2string(), UVM_MEDIUM)
-                `uvm_info(get_name(), $sformatf(" Write Burst Address with Size: %0d, Burst DATA with size : %0d ", trans.PADDR.size(), trans.PWDATA.size()), UVM_HIGH)
-
-                captured_addr = trans.PADDR;
-                captured_data = trans.PWDATA;
-                finish_item(trans);
-
-                // wait for sometime in middle
-                if (intf != null) begin
-                    repeat(5) @(posedge intf.clk);
-                end
-                else begin
-                    #20; // just in case the interface is null at the time.
-                end
-
-                /// read from saved addresses
-
-                start_item(trans);
-                if(!trans.randomize() with { 
-                    PRESETn == 1; 
-                    PWRITE  == 0;               // Force to READ
-
-                    PADDR.size() == captured_addr.size();
-                    foreach(PADDR[i]) {
-                        PADDR[i] == captured_addr[i];
-                    }
-                }) `uvm_fatal(get_name(), "Read Randomization Failed")
-                
-                finish_item(trans);
-
-            end
+    `uvm_info(get_name(), "Starting random Read After write", UVM_MEDIUM)
+    
+    repeat(no_of_testcases) begin
         
-        `uvm_info(get_name(), "----------------------------", UVM_LOW)
-        `uvm_info(get_name(), "Seq done: random write and read sequence", UVM_LOW)
-        `uvm_info(get_name(), "------------------------", UVM_LOW)
+	 // Reset
+
+    	`uvm_info(get_name(), "asserting Reset", UVM_MEDIUM)
+    	start_item(trans);
+    	if(!trans.randomize() with { trans.PRESETn == 0; }) 
+     	   `uvm_fatal(get_name(), "Reset Randomization Failed")
+   	finish_item(trans);       
+
+        // Write to a Random addresses as defined by the randomized address values
+
+        start_item(trans);
+        if(!trans.randomize() with { 
+            PRESETn == 1; 
+            PWRITE  == 1;       // Force WRITE
+        }) `uvm_fatal(get_name(), "Write Randomization Failed")
+        `uvm_info(get_name(), trans.convert2string(), UVM_MEDIUM)
+        `uvm_info(get_name(), $sformatf(" Write Burst Address with Size: %0d, Burst DATA with size : %0d ", trans.PADDR.size(), trans.PWDATA.size()), UVM_HIGH)
+
+        captured_addr = trans.PADDR;
+        captured_data = trans.PWDATA;
+        finish_item(trans);
+
+        /// read from saved addresses
+
+        start_item(trans);
+        if(!trans.randomize() with { 
+            PRESETn == 1; 
+            PWRITE  == 0;               // Force READ
+
+            PADDR.size() == captured_addr.size();
+            foreach(PADDR[i]) {
+                PADDR[i] == captured_addr[i];
+            }
+        }) `uvm_fatal(get_name(), "Read Randomization Failed")
+        
+        finish_item(trans);
+
+    end
+    
+    `uvm_info(get_name(), "----------------------------", UVM_LOW)
+    `uvm_info(get_name(), "Seq done: random write and read sequence", UVM_LOW)
+    `uvm_info(get_name(), "------------------------", UVM_LOW)
 endtask
 endclass
 
@@ -743,7 +716,7 @@ class driver extends uvm_driver#(transaction);
     endfunction: build_phase
 
     task drive_transfer(int index);
-        // SETUP PHASE
+        // 1. SETUP PHASE
     
         drv_intf.drv_cb.PSEL1   <= 1;
         drv_intf.drv_cb.PENABLE <= 0;
@@ -755,7 +728,7 @@ class driver extends uvm_driver#(transaction);
         // one clock cycle for Setup Phase to complete
         @(drv_intf.drv_cb);
 
-        // ACCESS PHASE
+        // 2. ACCESS PHASE
         // no chaneg in PSEL value, and drive PENABLE high
         drv_intf.drv_cb.PENABLE <= 1;
 
@@ -766,11 +739,11 @@ class driver extends uvm_driver#(transaction);
             @(drv_intf.drv_cb);
         end
 
-        // IDLE
+        // 3. IDLE
         // can Drop Select and Enable as txn is finished
         drv_intf.drv_cb.PSEL1   <= 0;
         drv_intf.drv_cb.PENABLE <= 0;
-    endtask
+endtask
 
     // drive task - Switches b/w different operating states
     task drive();
@@ -778,20 +751,10 @@ class driver extends uvm_driver#(transaction);
             `uvm_info("DRV_RESET_GIVEN","Driver is given reset for to the system",UVM_NONE);
             @(drv_intf.drv_cb);
             
-            drv_intf.drv_cb.PRESETn <= trans_drv.PRESETn;
-            drv_intf.drv_cb.PSEL1   <= trans_drv.PSEL1;  
-            drv_intf.drv_cb.PENABLE <= trans_drv.PENABLE;
-            drv_intf.drv_cb.PWRITE  <= trans_drv.PWRITE; 
-            drv_intf.drv_cb.PADDR   <= trans_drv.PADDR[0];   // give the value of index as 0
-            drv_intf.drv_cb.PWDATA  <= trans_drv.PWDATA[0];  // give the value of index as 0
-
-            // Wait for some cycles to let reset propagate
-            repeat (4) @(drv_intf.drv_cb);
-            
-            // De-assert Reset
+            drv_intf.drv_cb.PRESETn <= 0;
+            @(drv_intf.drv_cb);
+            // #10;
             drv_intf.drv_cb.PRESETn <= 1;
-            
-            `uvm_info("DRV", "Reset Released", UVM_NONE);
         end
         else begin
             `uvm_info("DRV_RESET_VALUE_CHECK",$sformatf("Value of reset in the design %0b",trans_drv.PRESETn),UVM_NONE);
@@ -853,9 +816,25 @@ class monitor extends uvm_monitor;
     endfunction: build_phase
     
     //  Function: run_phase
-    task run_phase(uvm_phase phase);
+      task run_phase(uvm_phase phase);
    
-
+/*    forever begin
+        fork
+            ip_mon();
+            op_mon();
+        join
+        `uvm_info(get_name(), $sformatf("pck_complete: %b, PSEL1: %b", pck_complete, intf.mon_cb.PSEL1), UVM_HIGH)
+        if((pck_complete && !intf.mon_cb.PSEL1) || !intf.mon_cb.PRESETn) begin
+            `uvm_info(get_name(), $sformatf("Sampled Packet is: %s", trans.convert2string()), UVM_NONE)
+            ap.write(trans);
+            trans = new("sam_trans");
+            ip_pntr = 0;
+            op_pntr = 0;
+            pck_complete = 0;
+        end
+    end
+    endtask: run_phase
+    */
     forever begin
         fork
             ip_mon();
@@ -872,14 +851,14 @@ class monitor extends uvm_monitor;
              pck_complete = 0;
              sampled = 0;
              
-            //  wait(intf.mon_cb.PRESETn == 1);
+            // wait(intf.mon_cb.PRESETn == 1);
         end
 
-        // Only send if the packet is complete AND the bus has gone idle (PSEL=0), and DATA read happened with PRDATA coming out from DUT.
-        // else if(pck_complete && !intf.mon_cb.PSEL1 && intf.mon_cb.PWRITE == 0 ) begin    // if we use this then it will accumulate the PADDR and PWDATA value for both read and write , while displaying for READ txn
-        else if(pck_complete && !intf.mon_cb.PSEL1) begin
-            `uvm_info(get_name(), $sformatf("Sampled Packet is: %s", trans.convert2string()), UVM_NONE)
-            `uvm_info("MON_CHAN",$sformatf("This is some data %0p", trans.PRDATA),UVM_NONE)
+        // Only send if the packet is complete AND the bus has gone idle (PSEL=0)
+        // else if(pck_complete && !intf.mon_cb.PSEL1 && intf.mon_cb.PWRITE == 0) begin
+        else if(pck_complete && !intf.mon_cb.PSEL1) begin   
+	 `uvm_info(get_name(), $sformatf("Sampled Packet is: %s", trans.convert2string()), UVM_NONE)
+	`uvm_info("MON_CHAN",$sformatf("This is some data %0p", trans.PRDATA), UVM_NONE)
             ap.write(trans);
             
             // Prepare for next packet
@@ -891,8 +870,7 @@ class monitor extends uvm_monitor;
     end
 endtask: run_phase
 
-
-    //   Method definitions
+    //   Method definitionss
 
     task ip_mon();
         @(intf.mon_cb);
@@ -907,20 +885,17 @@ endtask: run_phase
             ip_pntr++;
             sampled = 1;
         end
+        // if(intf.mon_cb.PENABLE == 0) sampled = 0;
         if(intf.mon_cb.PENABLE == 0 && intf.mon_cb.PSEL1 == 0 ) sampled = 0;
     endtask
 
     task op_mon();
         @(intf.mon_cb);
-        if(intf.mon_cb.PREADY == 1 && intf.mon_cb.PENABLE == 1 && intf.mon_cb.PSEL1 == 1 && intf.mon_cb.PRESETn == 1) begin
-        // if(intf.mon_cb.PREADY == 1 && intf.mon_cb.PENABLE == 1 ) begin         // commenting this one out to sample signals while above condition sets in
+        // if(intf.mon_cb.PREADY == 1 && intf.mon_cb.PENABLE == 1 && intf.mon_cb.PSEL1 == 1 && intf.mon_cb.PRESETn == 1) begin
+        if(intf.mon_cb.PREADY == 1 && intf.mon_cb.PENABLE == 1 ) begin
             trans.PREADY = intf.mon_cb.PREADY;
             trans.PSLVERR = intf.mon_cb.PSLVERR;
-            if (intf.mon_cb.PWRITE == 0) begin
-                trans.PRDATA[op_pntr]  = intf.mon_cb.PRDATA;
-            end else begin
-                trans.PRDATA[op_pntr] = 32'h0;
-            end
+            trans.PRDATA[op_pntr]  = intf.mon_cb.PRDATA;
             op_pntr++;
             pck_complete = 1;
         end 
@@ -928,6 +903,7 @@ endtask: run_phase
 
 
 endclass
+
 ///////////////////////////////////////
 //////////// MY REFERENCE MODEL ///////
 ///////////////////////////////////////	
@@ -996,7 +972,7 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
                 else begin
                     if(ram_mem[word_index] == 32'hffffffff) begin
                         /// reading uninitialized memory location is valid in APB, will receive GARBAGE though
-                        `uvm_warning("REF_MOD", $sformatf("Improper data READ | Bus Addr: %0h -> Mem Index in hex: [%0h] | Returning Garbage", 
+                        `uvm_warning("REF_MOD", $sformatf("UNINIT READ | Bus Addr: %0h -> Mem Index in hex: [%0h] | Returning Garbage", 
                                                            trans.PADDR[i], word_index)) 
                         trans.PRDATA[i] = 32'hffffffff;
                         trans.PREADY = 1;
@@ -1006,13 +982,14 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
                     trans.PRDATA[i] = ram_mem [word_index];
                     trans.PREADY = 1;
                     trans.PSLVERR = 0;
-                    `uvm_info("REF_MOD", $sformatf("Improper READ | Bus Addr: %0h -> Mem Index in hex: [%0h] | Data Read in hex: %0h", 
+                    `uvm_info("REF_MOD", $sformatf("READ | Bus Addr: %0h -> Mem Index in hex: [%0h] | Data Read in hex: %0h", 
                                                     trans.PADDR[i], word_index, trans.PRDATA[i]), UVM_MEDIUM)
                 end
             end
             return trans;
         end
-      
+
+       
     endfunction
 
 
@@ -1050,36 +1027,20 @@ class scoreboard extends uvm_scoreboard;
 
     // Function - check()
     function void check();
-        // only chek for flags, PSLVERR
-        // WRITE (Check Error Status Only)
-        if (act_trans.PWRITE == 1) begin
-            if(act_trans.PSLVERR !== exp_trans.PSLVERR) begin
-                `uvm_error("SCB", $sformatf("WRITE MISMATCH! Addr:0x%0h | ExpErr:%b ActErr:%b", act_trans.PADDR[0], exp_trans.PSLVERR, act_trans.PSLVERR))
-                failCnt++;
-            end
-            else if(act_trans.PSLVERR == 0) begin     // Normal Successful Write (No Error)
-                    `uvm_info("SCB", $sformatf("WRITE PASSED (Data Stored) | Addr:0x%0h", act_trans.PADDR[0]), UVM_NONE)
-                    passCnt++;
-                end
-            else begin  // successful write operation but invalid address hence write is blocked
-                `uvm_info("SCB", $sformatf("WRITE BLOCKED (Expected) | Addr:0x%0h | Cannot write to undefined memory", act_trans.PADDR[0]), UVM_NONE)
-                passCnt++;
-            end
+        if(act_trans.compare(exp_trans)) begin
+            `uvm_info("SCB", $sformatf("%s\nStatus -> TEST___PASSED", act_trans.convert2string()), UVM_NONE)
+            passCnt++;
+            `uvm_info("SCB",$sformatf("pass count value : %0d",passCnt),UVM_NONE)
         end
-        // READ (Check Data and error status)
-        else if(act_trans.PWRITE == 0) begin
-            if(act_trans.compare(exp_trans)) begin
-                `uvm_info("SCB", $sformatf("READ PASSED  | Addr:0x%0h | Data Match", act_trans.PADDR[0]), UVM_NONE)
-                passCnt++;
-            end
-            else begin
-                `uvm_error("SCB",$sformatf("READ MISMATCH! Addr:0x%0h \nExpected: %s \nActual: %s", act_trans.PADDR[0], exp_trans.convert2string(), act_trans.convert2string()))
-                failCnt++;
-            end
+        else begin
+            `uvm_error("SCB", $sformatf("Actual Packet: %s\nExpected Packet: %s\nStatus -> TEST__FAILED", 
+                    act_trans.convert2string(), exp_trans.convert2string()))
+            failCnt++;
+            `uvm_info("SCB",$sformatf("fail count value : %0d",failCnt),UVM_NONE)
         end
     endfunction
 
-    // Func - write
+    // Fuction - write
     virtual function void write(transaction trans);
        
         // Reset -> active low || PSEL1 =0 , do not check now as it is either in reset or PSEL = 0(Invalid txn)
@@ -1099,11 +1060,10 @@ class scoreboard extends uvm_scoreboard;
 
         // go ahead with check
         if(trans.PADDR.size() != 0) begin
-            act_trans.copy(trans);     // copy the value of transactions
+            act_trans.copy(trans);
             exp_trans = rm.get_ref_val(trans);
             check();            
         end
-
     endfunction
 
 endclass
@@ -1237,7 +1197,7 @@ class base_test extends uvm_test;
         // setting here a handle so that classes inside agent can access the agent_config block from here.
         uvm_config_db#(agent_config)::set(this, "env.agnt.*", "agnt_cfg", agnt_cfg);
         /// set the number of cases for the design from the base_test
-        uvm_config_db#(int)::set(null, "seq.*", "no_cases", 5);
+        uvm_config_db#(int)::set(null, "seq.*", "no_cases", 2);
         
         // seq = new();
         env = environment::type_id::create("env", this);
@@ -1356,8 +1316,8 @@ module full_tb;
 
     initial begin
         uvm_config_db#(virtual APB_intf)::set(null, "*", "intf", intf);
-        // run_test("base_test");
-        run_test("apb_write_test");
+        
+         run_test("apb_write_test");
         // run_test("apb_read_test");
         // run_test("apb_comprehensive_test");
         // run_test("apb_random_write_read_test");
@@ -1367,7 +1327,8 @@ module full_tb;
         $dumpfile("dump.vcd");
         $dumpvars;
         $assertvacuousoff(0);
-      	
+      	// #1350;
+        // $finish();
     end
 
 endmodule

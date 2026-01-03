@@ -152,7 +152,7 @@ class transaction extends uvm_sequence_item;
     static bit [9:0] p_id;      // Packet id
     static bit [3:0] f_id;      // Feature id
     rand bit PWRITE;            // Read/Write
-    rand bit[31:0] PWDATA [];   
+    rand logic [31:0] PWDATA [];   
     rand bit[31:0] PADDR [];   
     rand bit PRESETn;
     // bit PRESETn;
@@ -162,7 +162,7 @@ class transaction extends uvm_sequence_item;
     bit PENABLE;
 
     bit PREADY;
-    bit [31:0] PRDATA [int];
+    bit [31:0] PRDATA [];
     bit PSLVERR;
 
     // register the varibles here for using the inbuilt functions like copy, compare etc etc
@@ -270,7 +270,12 @@ class transaction extends uvm_sequence_item;
         if(PADDR.size() == 0)
             PADDR = new[1];
         else
-            PADDR = new[PADDR.size()+1] (PADDR);    
+            PADDR = new[PADDR.size()+1] (PADDR);
+
+        if(PRDATA.size() == 0)
+            PRDATA = new[1];
+        else
+            PRDATA = new[PRDATA.size()+1] (PRDATA);
     endfunction
 
     /// functions , may use at some stage
@@ -839,7 +844,7 @@ class monitor extends uvm_monitor;
     function new(string name, uvm_component parent);
         super.new(name, parent);
       `uvm_info("MON","Monitor constructor got executed",UVM_NONE);
-    endfunction //new()
+    endfunction
 
     //  Function: build_phase
     virtual function void build_phase(uvm_phase phase);
@@ -866,7 +871,7 @@ class monitor extends uvm_monitor;
 
         if(!intf.mon_cb.PRESETn) begin
              `uvm_info(get_name(), "Monitor detected RESET. Clearing internal state.", UVM_HIGH)
-             trans = new("sam_trans"); 
+             trans = new("sam_trans");   // create this new instance everytime on reset for a fresh packet
              ip_pntr = 0;
              op_pntr = 0;
              pck_complete = 0;
@@ -879,11 +884,11 @@ class monitor extends uvm_monitor;
         // else if(pck_complete && !intf.mon_cb.PSEL1 && intf.mon_cb.PWRITE == 0 ) begin    // if we use this then it will accumulate the PADDR and PWDATA value for both read and write , while displaying for READ txn
         else if(pck_complete && !intf.mon_cb.PSEL1) begin
             `uvm_info(get_name(), $sformatf("Sampled Packet is: %s", trans.convert2string()), UVM_NONE)
-            `uvm_info("MON_CHAN",$sformatf("This is some data %0p", trans.PRDATA),UVM_NONE)
+            // `uvm_info("MON_CHAN",$sformatf("This is some data %0p", trans.PRDATA),UVM_NONE)
             ap.write(trans);
             
             // Prepare for next packet
-            trans = new("sam_trans");
+            trans = new("sam_trans");    // here as well, create a new packet once done using the earlier packet
             ip_pntr = 0;
             op_pntr = 0;
             pck_complete = 0;
@@ -916,6 +921,14 @@ endtask: run_phase
         // if(intf.mon_cb.PREADY == 1 && intf.mon_cb.PENABLE == 1 ) begin         // commenting this one out to sample signals while above condition sets in
             trans.PREADY = intf.mon_cb.PREADY;
             trans.PSLVERR = intf.mon_cb.PSLVERR;
+            
+            `uvm_info("MON_TEMP_DEBUG",$sformatf("value op_ptr 0x%0h  data coming out of dut PRDATA =  %0p",op_pntr,intf.mon_cb.PRDATA),UVM_NONE)
+            // this will make sure that the PRDATA array does not have zero size incase there is some output data
+            if(trans.PRDATA.size() <= op_pntr) begin        // since I am running ip_mon and op_mon in under fork_join. Then it is happening that the PRDATA array size is 0 
+                                                            // incase OP_MON ran first because increase_size() function did not execute.
+                trans.PRDATA = new[op_pntr + 1] (trans.PRDATA);
+            end
+            
             if (intf.mon_cb.PWRITE == 0) begin
                 trans.PRDATA[op_pntr]  = intf.mon_cb.PRDATA;
             end else begin
@@ -949,69 +962,79 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
     // Function: get_ref_val()
     function transaction get_ref_val(transaction trans);
 
-    /// convert byte address to word index
-    bit [31:0] word_index;
+        /// convert byte address to word index
+        bit [31:0] word_index;
 
-        if(trans.PRESETn == 0) begin
-            foreach (ram_mem[j]) ram_mem[j] = 32'hffffffff;
-            trans.PSLVERR = 0;
-            trans.PREADY = 0;
-            `uvm_info("REF_MOD", "System Reset: Memory Cleared", UVM_LOW)
-            return trans;
-        end
+            // reset handling block
+            if(trans.PRESETn == 0) begin
+                foreach (ram_mem[j]) ram_mem[j] = 32'hffffffff;
+                trans.PSLVERR = 0;
+                trans.PREADY = 0;
+                `uvm_info("REF_MOD", "System Reset: Memory Cleared", UVM_LOW)
+                return trans;
+            end
 
-        else if(trans.PRESETn == 1) begin
-            for(int i=0; i<trans.PADDR.size(); i++) begin
+            // handle active transactions
+            else if(trans.PRESETn == 1) begin
 
-                word_index = trans.PADDR[i] >> 2; /// ignoring the last 2 bit values here given from the APB MASTER (convert byte addressing to word addressing so that no memory locatuons are left behind)
-    
-                // if(trans.PADDR[i] >= ram_depth) begin
-                // check for word index if more than the memory size
-                if(word_index >= ram_depth) begin
-                    `uvm_error("REF_MOD", $sformatf("Invalid access Addr:0x%0h (Index:%0d) > Max:%0d", 
-                                                    trans.PADDR[i], word_index, ram_depth))
-                    trans.PSLVERR = 1;
-                    trans.PRDATA[i] = 32'b0;
-                    trans.PREADY = 1;
-                    continue;
+                // adding these lines here to ensure that output array exists there before writing into it
+                if (trans.PRDATA.size() != trans.PADDR.size()) begin
+                    trans.PRDATA = new[trans.PADDR.size()];
                 end
-    
-                if(trans.PWRITE == 1) begin
-                    // bad data written , turn PSLVERR as 1
-                    if(trans.PWDATA[i] === 32'hx || trans.PWDATA[i] === 32'hz ) begin
-                        `uvm_error("REF_MOD", $sformatf("bad data write: Addr:%0h Data:%0h", trans.PADDR[i], trans.PWDATA[i]))
+
+
+                for(int i=0; i<trans.PADDR.size(); i++) begin
+
+                    word_index = trans.PADDR[i] >> 2; /// ignoring the last 2 bit values here given from the APB MASTER (convert byte addressing to word addressing so that no memory locatuons are left behind)
+        
+                    // if(trans.PADDR[i] >= ram_depth) begin
+                    // check for word index if more than the memory size
+                    if(word_index >= ram_depth) begin
+                        `uvm_error("REF_MOD", $sformatf("Invalid access Addr:0x%0h (Index:%0d) > Max:%0d", 
+                                                        trans.PADDR[i], word_index, ram_depth))
+                        trans.PSLVERR = 1;
                         trans.PRDATA[i] = 32'b0;
                         trans.PREADY = 1;
-                        trans.PSLVERR = 1;
                         continue;
                     end
-                    // else write full 32 bit data in the memory location calculated
-                    ram_mem [word_index] = trans.PWDATA[i];
-                    trans.PRDATA[i] = 32'b0;
-                    trans.PREADY = 1;
-                    trans.PSLVERR = 0;
-                    `uvm_info("REF_MOD", $sformatf("WRITE | input Bus Addr: %0h -> actual Mem Index in hex: [%0h] | Data Stored: %0h", 
-                                                    trans.PADDR[i], word_index, trans.PWDATA[i]), UVM_MEDIUM)
-                end
-                else begin
-                    if(ram_mem[word_index] == 32'hffffffff) begin
-                        /// reading uninitialized memory location is valid in APB, will receive GARBAGE though
-                        `uvm_warning("REF_MOD", $sformatf("Improper data READ | Bus Addr: %0h -> Mem Index in hex: [%0h] | Returning Garbage", 
-                                                           trans.PADDR[i], word_index)) 
-                        trans.PRDATA[i] = 32'hffffffff;
+        
+                    // write operation here
+                    if(trans.PWRITE == 1) begin
+                        // bad data written , turn PSLVERR as 1
+                        if(trans.PWDATA[i] === 32'hx || trans.PWDATA[i] === 32'hz ) begin
+                            `uvm_error("REF_MOD", $sformatf("bad data write: Addr:%0h Data:%0h", trans.PADDR[i], trans.PWDATA[i]))
+                            trans.PRDATA[i] = 32'b0;
+                            trans.PREADY = 1;
+                            trans.PSLVERR = 1;
+                            continue;
+                        end
+                        // else write full 32 bit data in the memory location calculated
+                        ram_mem [word_index] = trans.PWDATA[i];
+                        trans.PRDATA[i] = 32'b0;
                         trans.PREADY = 1;
                         trans.PSLVERR = 0;
-                        continue;
+                        `uvm_info("REF_MOD", $sformatf("WRITE | input Bus Addr: %0h -> actual Mem Index in hex: [%0h] | Data Stored: %0h", 
+                                                        trans.PADDR[i], word_index, trans.PWDATA[i]), UVM_MEDIUM)
                     end
-                    trans.PRDATA[i] = ram_mem [word_index];
-                    trans.PREADY = 1;
-                    trans.PSLVERR = 0;
-                    `uvm_info("REF_MOD", $sformatf("Improper READ | Bus Addr: %0h -> Mem Index in hex: [%0h] | Data Read in hex: %0h", 
-                                                    trans.PADDR[i], word_index, trans.PRDATA[i]), UVM_MEDIUM)
+                    else begin
+                        if(ram_mem[word_index] == 32'hffffffff) begin
+                            /// reading uninitialized memory location is valid in APB, will receive GARBAGE though
+                            `uvm_warning("REF_MOD", $sformatf("Improper data READ | Bus Addr: %0h -> Mem Index in hex: [%0h] | Returning Garbage", 
+                                                            trans.PADDR[i], word_index)) 
+                            trans.PRDATA[i] = 32'hffffffff;
+                            trans.PREADY = 1;
+                            trans.PSLVERR = 0;
+                            continue;
+                        end
+                        trans.PRDATA[i] = ram_mem [word_index];
+                        trans.PREADY = 1;
+                        trans.PSLVERR = 0;
+                        `uvm_info("REF_MOD", $sformatf("Correct READ | Bus Addr: %0h -> Mem Index in hex: [%0h] | Data Read in hex: %0h", 
+                                                        trans.PADDR[i], word_index, trans.PRDATA[i]), UVM_MEDIUM)
+                    end
                 end
+                return trans;
             end
-            return trans;
-        end
       
     endfunction
 
@@ -1069,7 +1092,7 @@ class scoreboard extends uvm_scoreboard;
         // READ (Check Data and error status)
         else if(act_trans.PWRITE == 0) begin
             if(act_trans.compare(exp_trans)) begin
-                `uvm_info("SCB", $sformatf("READ PASSED  | Addr:0x%0h | Data Match", act_trans.PADDR[0]), UVM_NONE)
+                `uvm_info("SCB", $sformatf("READ PASSED  | Addr:0x%0p | Actual data: 0x%0p | expected data: 0x%0p Data Match", act_trans.PADDR,act_trans.PRDATA, exp_trans.PRDATA), UVM_NONE)
                 passCnt++;
             end
             else begin
@@ -1101,6 +1124,7 @@ class scoreboard extends uvm_scoreboard;
         if(trans.PADDR.size() != 0) begin
             act_trans.copy(trans);     // copy the value of transactions
             exp_trans = rm.get_ref_val(trans);
+            `uvm_info("SCB_TEMP_DEBUG", $sformatf("value of actual PRDATA array : 0x%0p and expected PRDATA ARRAY : 0x%0p",act_trans.PRDATA,exp_trans.PRDATA),UVM_NONE)
             check();            
         end
 

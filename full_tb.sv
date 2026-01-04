@@ -956,7 +956,11 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
     function new(string name, uvm_component parent);
         super.new(name, parent);
         ram_mem = new[ram_depth];
-        `uvm_info("REF_MOD","ref_model execution, depth = 32",UVM_NONE);
+        foreach(ram_mem[i]) ram_mem[i] = 32'hffffffff;       /// adding this here, because the ref_model's memory should be initialized to ffff_ffff. when the constructor runs. 
+        `uvm_info("REF_MOD","ref_model execution, depth = 32, Memory Initialized to 0xffffffff",UVM_NONE);
+        for(int k=0; k<5; k++) begin
+            `uvm_info("REF_MOD_DEBUG", $sformatf("Index [%0d] = %h", k, ram_mem[k]), UVM_NONE)
+        end
     endfunction
 
     // Function: get_ref_val()
@@ -967,7 +971,7 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
 
             // reset handling block
             if(trans.PRESETn == 0) begin
-                foreach (ram_mem[j]) ram_mem[j] = 32'hffffffff;
+                foreach (ram_mem[j]) ram_mem[j] = 32'hffffffff;   // adding this here because it should reset the memory to ffff_ffff , incase there is a reset in middle.
                 trans.PSLVERR = 0;
                 trans.PREADY = 0;
                 `uvm_info("REF_MOD", "System Reset: Memory Cleared", UVM_LOW)
@@ -982,7 +986,6 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
                     trans.PRDATA = new[trans.PADDR.size()];
                 end
 
-
                 for(int i=0; i<trans.PADDR.size(); i++) begin
 
                     word_index = trans.PADDR[i] >> 2; /// ignoring the last 2 bit values here given from the APB MASTER (convert byte addressing to word addressing so that no memory locatuons are left behind)
@@ -990,11 +993,17 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
                     // if(trans.PADDR[i] >= ram_depth) begin
                     // check for word index if more than the memory size
                     if(word_index >= ram_depth) begin
-                        `uvm_error("REF_MOD", $sformatf("Invalid access Addr:0x%0h (Index:%0d) > Max:%0d", 
-                                                        trans.PADDR[i], word_index, ram_depth))
+                        `uvm_error("REF_MOD", $sformatf("Invalid access Addr:0x%0h (Index:%0d) > Max:%0d",trans.PADDR[i], word_index, ram_depth))
                         trans.PSLVERR = 1;
-                        trans.PRDATA[i] = 32'b0;
+                        // trans.PRDATA[i] = 32'hffffffff;   // this was earlier set to 32'd0. This was causing an issue as it was sending PRDATA value a 0. instead it should send the default memory values i.e. in this case is  32'hffff_ffff
+                        `uvm_info("REF_MOD_DEBUG", "Returning the value for PRDATA fr invalid memory access", UVM_NONE)
                         trans.PREADY = 1;
+                        // adding this so that the ref_model can understand that for PWRITE = 1, read data = 0 (nothing will be read) || for PWRITE = 0 , read data = ffff_ffff (Invalid address as input hence, invalid data as output)
+                        if (trans.PWRITE == 1) begin
+                            trans.PRDATA[i] = 32'b0;      // Write = Quiet Bus
+                        end else begin
+                            trans.PRDATA[i] = 32'hffffffff; // Read = Garbage Data
+                        end
                         continue;
                     end
         
@@ -1003,7 +1012,8 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
                         // bad data written , turn PSLVERR as 1
                         if(trans.PWDATA[i] === 32'hx || trans.PWDATA[i] === 32'hz ) begin
                             `uvm_error("REF_MOD", $sformatf("bad data write: Addr:%0h Data:%0h", trans.PADDR[i], trans.PWDATA[i]))
-                            trans.PRDATA[i] = 32'b0;
+                            // trans.PRDATA[i] = 32'b0;
+                            trans.PRDATA[i] = 32'hffffffff;     // invalid data
                             trans.PREADY = 1;
                             trans.PSLVERR = 1;
                             continue;

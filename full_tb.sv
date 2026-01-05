@@ -153,7 +153,7 @@ class transaction extends uvm_sequence_item;
     static bit [3:0] f_id;      // Feature id
     rand bit PWRITE;            // Read/Write
     rand logic [31:0] PWDATA [];   
-    rand bit[31:0] PADDR [];   
+    rand logic [31:0] PADDR [];   
     rand bit PRESETn;
     // bit PRESETn;
     
@@ -651,7 +651,7 @@ class apb_random_write_read_seq extends rnd_sequence;
         super.new(name);
     endfunction
 
-    bit [31:0] captured_addr []; // array to hold generated write addresses
+    logic [31:0] captured_addr []; // array to hold generated write addresses
     logic [31:0] captured_data [];
 
     virtual task body();
@@ -785,6 +785,71 @@ class apb_val_inval_addr extends rnd_sequence;
     endtask
 
 endclass
+
+
+////////////////////////
+///// invalid write data (aka noise) /////////////
+//////////////////////
+
+
+class apb_noise_data_seq extends rnd_sequence;
+
+    `uvm_object_utils(apb_noise_data_seq)
+
+    function new(string name = "apb_noise_data_seq");
+        super.new(name);
+    endfunction
+    
+    virtual task body();
+        `uvm_info(get_name(), "Starting Data Noise Sequence (X/Z Injection)", UVM_MEDIUM)
+
+        // reset
+        reset_dut();
+
+        repeat(no_of_testcases) begin
+            start_item(trans);
+            
+
+            if(!trans.randomize() with {
+                PRESETn == 1;
+                PWRITE  == 1; // only writing
+                
+                // fixing burst size here (although a constraint is already in place for this, but yeah why not add some here)
+                PADDR.size() inside {[1:5]};
+                // PWDATA.size() == PADDR.size();
+                
+                // Keep addresses valid for this test to focus purely on Data
+                foreach(PADDR[i]) PADDR[i] inside {[0:'h1F]}; 
+            }) begin
+                `uvm_fatal(get_name(), "Randomization failed")
+            end
+
+            // 2. The Corruption Logic (Post-Randomization)
+            // We iterate through the data and randomly inject X or Z
+            foreach(trans.PWDATA[i]) begin
+                int prob_chance = $urandom_range(0, 99); // 0 to 99
+                
+                if (prob_chance < 10) begin
+                    // 10% Chance -- give input as "X"
+                    trans.PWDATA[i] = 32'bx;
+                    `uvm_info(get_name(), $sformatf("Injecting 'X' at index: %0d", i), UVM_HIGH)
+                end 
+                else if (prob_chance < 20) begin
+                    // 10% Chance -- give input as "Z"
+                    trans.PWDATA[i] = 32'bz;
+                    `uvm_info(get_name(), $sformatf("Injecting 'Z' at index: %0d", i), UVM_HIGH)
+                end
+                // rest, let them stay valid
+            end
+
+            finish_item(trans);
+        end
+        
+        `uvm_info(get_name(), "Finished Data Noise Sequence", UVM_MEDIUM)
+
+    endtask
+endclass
+
 
 ///////////////////////////////////////
 //////////// MY DRIVER /////////////
@@ -1058,9 +1123,9 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
                                                     trans.PADDR[i], word_index, ram_depth),UVM_NONE)
                     trans.PSLVERR = 1;
                     // trans.PRDATA[i] = 32'hffffffff;   // this was earlier set to 32'd0. This was causing an issue as it was sending PRDATA value a 0. instead it should send the default memory values i.e. in this case is  32'hffff_ffff
-        	 `uvm_info("REF_MOD_DEBUG", "Returning the value for PRDATA fr invalid memory access", UVM_NONE)                   
-		    trans.PREADY = 1;
-		// adding this so that the ref_model can understand that for PWRITE = 1, read data = 0 (nothing will be read) || for PWRITE = 0 , read data = ffff_ffff (Invalid address as input hence, invalid data as output)
+                            `uvm_info("REF_MOD_DEBUG", "Returning the value for PRDATA fr invalid memory access", UVM_NONE)                   
+                            trans.PREADY = 1;
+                        // adding this so that the ref_model can understand that for PWRITE = 1, read data = 0 (nothing will be read) || for PWRITE = 0 , read data = ffff_ffff (Invalid address as input hence, invalid data as output)
                         if (trans.PWRITE == 1) begin
                             trans.PRDATA[i] = 32'b0;      // Write = Quiet Bus
                         end else begin
@@ -1070,13 +1135,17 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
                 end
     
                 if(trans.PWRITE == 1) begin
-                    // bad data written , turn PSLVERR as 1
+                    // bad data written , for actual hardware -- turn PSLVERR as 1
+                    // but for  simulating here we need to pass the value to rf model
                     if(trans.PWDATA[i] === 32'hx || trans.PWDATA[i] === 32'hz ) begin
                         `uvm_info("REF_MOD", $sformatf("bad data write: Addr:%0h Data:%0h", trans.PADDR[i], trans.PWDATA[i]),UVM_NONE)
-                        trans.PRDATA[i] = 32'b0;
+                        `uvm_info("REF_MOD", $sformatf("Writing 'X' or 'Z' to memory. Addr:%0h", trans.PADDR[i]), UVM_NONE)
+                        // trans.PRDATA[i] = 32'b0;
+                        ram_mem[word_index] = trans.PWDATA[i];
                         trans.PREADY = 1;
-                        trans.PSLVERR = 1;
-                        continue;
+                        // trans.PSLVERR = 1;
+                        trans.PSLVERR = 0;   // Since, DUT will not mark it as error as it cannot recognize X or Z
+                        // continue;
                     end
                     // else write full 32 bit data in the memory location calculated
                     ram_mem [word_index] = trans.PWDATA[i];
@@ -1453,6 +1522,27 @@ class apb_val_inval_addr_test extends base_test;
 
 endclass
 
+
+class apb_noise_data_seq_test extends base_test;
+
+    `uvm_component_utils(apb_noise_data_seq_test)
+
+    apb_noise_data_seq noise_seq;
+
+    //cons
+    function new(string name = "apb_noise_data_seq_test", uvm_component parent);
+        super.new(name,parent);
+    endfunction
+
+    task run_phase(uvm_phase phase);
+        phase.raise_objection(this);
+        noise_seq = apb_noise_data_seq::type_id::create("noise_seq");
+        noise_seq.start(env.agnt.seqr);     // initiate the sequence
+        phase.drop_objection(this);
+    endtask
+
+endclass
+
 ///////////////////////////////////////
 //////////// MY TB TOP       //////////
 ///////////////////////////////////////
@@ -1477,7 +1567,8 @@ module full_tb;
         // run_test("apb_read_test");
         // run_test("apb_comprehensive_test");
         // run_test("apb_random_write_read_test");
-	run_test("apb_val_inval_addr_test");
+    	// run_test("apb_val_inval_addr_test");
+	run_test("apb_noise_data_seq_test");
     end
 
     initial begin

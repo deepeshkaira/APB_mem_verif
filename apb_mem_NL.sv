@@ -89,7 +89,8 @@ endproperty
 assert_valid_data: assert property (p_valid_write_data)
     else $error("APB PROTOCOL VIOLATION: Write Data contains X or Z");
 
-	assign PRDATA = PRDATA_reg;
+	// assign PRDATA = PRDATA_reg;
+    assign PRDATA = (PSLVERR_reg) ? 32'hFFFFFFFF : PRDATA_reg;    // necessary to do because there can be leak sometimes 3 in 300 cases. This can cause issue thus we need to properly gate the output by looking at PSLVERR
 	assign PREADY = PREADY_reg;
 	assign PSLVERR = PSLVERR_reg;
 

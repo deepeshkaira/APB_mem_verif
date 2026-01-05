@@ -667,7 +667,7 @@ class apb_random_write_read_seq extends rnd_sequence;
             // Reset
             reset_dut();
 
-            // Directed traffic (Write then -> Read then -> Compare)
+            // Directed traffic (Write then -> compare (flags) --> Read then -> Compare (data n maybe flags))
 
             `uvm_info(get_name(), "Starting random Read After write", UVM_MEDIUM)
             
@@ -861,40 +861,41 @@ class monitor extends uvm_monitor;
     task run_phase(uvm_phase phase);
    
 
-    forever begin
-        fork
-            ip_mon();
-            op_mon();
-        join
-        
-        // If Reset is Active Low, discard current data 
-
-        if(!intf.mon_cb.PRESETn) begin
-             `uvm_info(get_name(), "Monitor detected RESET. Clearing internal state.", UVM_HIGH)
-             trans = new("sam_trans");   // create this new instance everytime on reset for a fresh packet
-             ip_pntr = 0;
-             op_pntr = 0;
-             pck_complete = 0;
-             sampled = 0;
-             
-            //  wait(intf.mon_cb.PRESETn == 1);
-        end
-
-        // Only send if the packet is complete AND the bus has gone idle (PSEL=0), and DATA read happened with PRDATA coming out from DUT.
-        // else if(pck_complete && !intf.mon_cb.PSEL1 && intf.mon_cb.PWRITE == 0 ) begin    // if we use this then it will accumulate the PADDR and PWDATA value for both read and write , while displaying for READ txn
-        else if(pck_complete && !intf.mon_cb.PSEL1) begin
-            `uvm_info(get_name(), $sformatf("Sampled Packet is: %s", trans.convert2string()), UVM_NONE)
-            // `uvm_info("MON_CHAN",$sformatf("This is some data %0p", trans.PRDATA),UVM_NONE)
-            ap.write(trans);
+        forever begin
+            fork
+                ip_mon();
+                op_mon();
+            join
             
-            // Prepare for next packet
-            trans = new("sam_trans");    // here as well, create a new packet once done using the earlier packet
-            ip_pntr = 0;
-            op_pntr = 0;
-            pck_complete = 0;
+            // If Reset is Active Low, discard current data 
+
+            if(!intf.mon_cb.PRESETn) begin
+                `uvm_info(get_name(), "Monitor detected RESET. Clearing internal state.", UVM_HIGH)
+                trans = new("sam_trans");   // create this new instance everytime on reset for a fresh packet
+                ip_pntr = 0;
+                op_pntr = 0;
+                pck_complete = 0;
+                sampled = 0;
+                
+                //  wait(intf.mon_cb.PRESETn == 1);
+            end
+
+            // Only send if the packet is complete AND the bus has gone idle (PSEL=0), and DATA read happened with PRDATA coming out from DUT.
+            // else if(pck_complete && !intf.mon_cb.PSEL1 && intf.mon_cb.PWRITE == 0 ) begin    // if we use this then it will accumulate the PADDR and PWDATA value for both read and write , while displaying for READ txn
+            else if(pck_complete && !intf.mon_cb.PSEL1) begin
+                `uvm_info(get_name(), $sformatf("Sampled Packet is: %s", trans.convert2string()), UVM_NONE)
+                `uvm_info("MON_TEMP_VAL_TO_AP_DEBUG",$sformatf("This is data going into the analysis port %0p", trans.PRDATA),UVM_NONE)
+                ap.write(trans);
+                
+                // Prepare for next packet
+                trans = new("sam_trans");    // here as well, create a new packet once done using the earlier packet
+                ip_pntr = 0;
+                op_pntr = 0;
+                pck_complete = 0;
+            end
         end
-    end
-endtask: run_phase
+
+    endtask: run_phase
 
 
     //   Method definitions
@@ -909,10 +910,13 @@ endtask: run_phase
             trans.increaseSize();
             trans.PADDR[ip_pntr]  = intf.mon_cb.PADDR;
             trans.PWDATA[ip_pntr] = intf.mon_cb.PWDATA;
+            `uvm_info("MON_INPUT_DATA_CAPTURE_TEMP_DEBUG", $sformatf("Input data captured by mon: Ptr=%0d |PADDR = %0h | Captured Data=%0h | PADDR Size=%0d ", 
+                                                ip_pntr, trans.PWDATA, trans.PWDATA[ip_pntr], trans.PADDR.size()), UVM_NONE)
             ip_pntr++;
             sampled = 1;
         end
-        if(intf.mon_cb.PENABLE == 0 && intf.mon_cb.PSEL1 == 0 ) sampled = 0;
+        // if(intf.mon_cb.PENABLE == 0 && intf.mon_cb.PSEL1 == 0 ) sampled = 0;   /// this is giving issue because in burst read we have PSEL1 ==1 for the whole burst and that is why it is checking the values only ONCE.
+        if(intf.mon_cb.PENABLE == 0) sampled = 0;  // this is going to work perfectly for sngle operations as well becuase PENABLE is somethinig that focuses on one word.
     endtask
 
     task op_mon();

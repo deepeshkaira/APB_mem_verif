@@ -652,7 +652,7 @@ class apb_random_write_read_seq extends rnd_sequence;
     endfunction
 
     logic [31:0] captured_addr []; // array to hold generated write addresses
-    logic [31:0] captured_data [];
+    // logic [31:0] captured_data [];
 
     virtual task body();
             `uvm_info(get_name(), "---------------------------------------", UVM_LOW)
@@ -679,7 +679,7 @@ class apb_random_write_read_seq extends rnd_sequence;
                 `uvm_info(get_name(), $sformatf(" Write Burst Address with Size: %0d, Burst DATA with size : %0d ", trans.PADDR.size(), trans.PWDATA.size()), UVM_HIGH)
 
                 captured_addr = trans.PADDR;
-                captured_data = trans.PWDATA;
+                // captured_data = trans.PWDATA;
                 finish_item(trans);
 
                 // wait for sometime in middle
@@ -850,6 +850,64 @@ class apb_noise_data_seq extends rnd_sequence;
     endtask
 endclass
 
+///////////////////////////////////////
+//////////// RACE CONDITION /////////////
+///////////////////////////////////////	
+
+class apb_race_hazard extends rnd_sequence;
+
+    `uvm_object_utils(apb_race_hazard)
+
+    logic [31:0] captured_addr []; // array to hold generated write addresses
+    // logic [31:0] captured_data [];   /// array to hold 
+
+    //cons
+    function new(string name = "apb_race_hazard");
+        super.new(name);
+    endfunction
+
+    virtual task body();
+        `uvm_info(get_name(),"Starting Race hazard: Immediate read after some write",UVM_NONE);
+
+        reset_dut();
+
+        repeat (no_of_testcases) begin
+            // write to the memory
+            start_item(trans);
+            if(!trans.randomize() with {
+                PRESETn == 1;
+                PWRITE == 1;
+                PADDR.size() inside {[1:5]}; // constraint just for observability
+            }) begin
+            `uvm_error(get_name(),"Write randomization failed");
+            end
+
+            captured_addr = trans.PADDR;
+            finish_item(trans);
+
+            // no wait, directly read from the memory
+            start_item(trans);
+            if(!trans.randomize() with {
+                PRESETn == 1;
+                PWRITE == 0;
+                
+                PADDR.size() == captured_addr.size();
+                foreach(PADDR[i]) {
+                PADDR[i] == captured_addr[i]; 
+                }
+                
+            }) begin
+                `uvm_error(get_name(),"Read randomization failed");
+            end 
+            finish_item(trans);
+ 
+        end
+        
+    `uvm_info(get_name(), "Finished race hazard Sequence", UVM_MEDIUM)
+
+    endtask
+
+endclass
 
 ///////////////////////////////////////
 //////////// MY DRIVER /////////////
@@ -1017,9 +1075,9 @@ class monitor extends uvm_monitor;
         // else if(pck_complete && !intf.mon_cb.PSEL1 && intf.mon_cb.PWRITE == 0 ) begin    // if we use this then it will accumulate the PADDR and PWDATA value for both read and write , while displaying for READ txn
         else if(pck_complete && !intf.mon_cb.PSEL1) begin
             `uvm_info(get_name(), $sformatf("Sampled Packet is: %s", trans.convert2string()), UVM_NONE)
- 	    `uvm_info("MON_TEMP_VAL_TO_AP_DEBUG",$sformatf("This is data going into the analysis port %0p", trans.PRDATA),UVM_NONE)
-                       
-	    ap.write(trans);
+            `uvm_info("MON_TEMP_VAL_TO_AP_DEBUG",$sformatf("This is data going into the analysis port %0p", trans.PRDATA),UVM_NONE)
+                        
+            ap.write(trans);
             
             // Prepare for next packet
             trans = new("sam_trans");
@@ -1090,9 +1148,9 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
     function new(string name, uvm_component parent);
         super.new(name, parent);
         ram_mem = new[ram_depth];
-	foreach(ram_mem[i]) ram_mem[i] = 32'hffffffff;       /// adding this here, because the ref_model's memory should be initialized to ffff_ffff. when the constructor runs. 
-        `uvm_info("REF_MOD","ref_model execution, depth = 32, Memory Initialized to 0xffffffff",UVM_NONE);
-	for(int k=0; k<5; k++) begin
+        foreach(ram_mem[i]) ram_mem[i] = 32'hffffffff;       /// adding this here, because the ref_model's memory should be initialized to ffff_ffff. when the constructor runs. 
+            `uvm_info("REF_MOD","ref_model execution, depth = 32, Memory Initialized to 0xffffffff",UVM_NONE);
+        for(int k=0; k<5; k++) begin
             `uvm_info("REF_MOD_DEBUG", $sformatf("Index [%0d] = %h", k, ram_mem[k]), UVM_NONE)
         end
     endfunction
@@ -1147,8 +1205,23 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
                         trans.PSLVERR = 0;   // Since, DUT will not mark it as error as it cannot recognize X or Z
                         // continue;
                     end
-                    // else write full 32 bit data in the memory location calculated
-                    ram_mem [word_index] = trans.PWDATA[i];
+                    // write full 32 bit data in the memory location calculated
+                    
+                    // INSTANT MEMORY UPDATE *****************************
+                    // ram_mem [word_index] = trans.PWDATA[i];
+
+                    // delayed update to the internal memory (RACE CONDITION CREATION)
+			        // fork join_none here-- creates a parallel schedule  to run. Mmeroy update is going to update later but the output has been generated immediately (PRDATA, PREADY, PSLVERR)
+
+                    fork
+                        begin
+                            `uvm_info("REF_RACE_DEBUG", "Delayed Ref_model Memory Update start", UVM_NONE)
+                            #0; // The delay that will cause the race. can use #1 to make delay more obvious but lets try with this first.
+                            ram_mem[word_index] = trans.PWDATA[i]; 
+                            `uvm_info("REF_RACE_DEBUG", "Delayed Memory Update Complete", UVM_NONE)
+                        end
+                    join_none
+                    
                     trans.PRDATA[i] = 32'b0;
                     trans.PREADY = 1;
                     trans.PSLVERR = 0;
@@ -1543,6 +1616,26 @@ class apb_noise_data_seq_test extends base_test;
 
 endclass
 
+class apb_race_hazard_test extends base_test;
+
+    `uvm_component_utils(apb_race_hazard_test)
+
+    apb_race_hazard race_seq;
+
+    //cons
+    function new(string name = "apb_race_hazard_test", uvm_component parent);
+        super.new(name,parent);
+    endfunction
+
+    task run_phase(uvm_phase phase);
+        phase.raise_objection(this);
+        race_seq = apb_race_hazard::type_id::create("race_seq");
+        race_seq.start(env.agnt.seqr);     // initiate the sequence
+        phase.drop_objection(this);
+    endtask
+
+endclass
+
 ///////////////////////////////////////
 //////////// MY TB TOP       //////////
 ///////////////////////////////////////
@@ -1568,7 +1661,8 @@ module full_tb;
         // run_test("apb_comprehensive_test");
         // run_test("apb_random_write_read_test");
     	// run_test("apb_val_inval_addr_test");
-	run_test("apb_noise_data_seq_test");
+	    // run_test("apb_noise_data_seq_test");
+	    run_test("apb_race_hazard_test");
     end
 
     initial begin

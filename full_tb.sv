@@ -1054,9 +1054,18 @@ class monitor extends uvm_monitor;
 
     forever begin
         fork
-            ip_mon();
-            op_mon();
-        join
+            begin    /// this block will not be finished until both are done.
+                fork
+                    ip_mon();
+                    op_mon();                    
+                join
+            end
+            begin   // just in case Reset comes in randomly, we would like to get out of the block.
+                wait(intf.mon_cb.PRESETn == 0);
+            end
+        join_any
+        
+        disable fork;   // kill the threads which are slow.
         
         // If Reset is Active Low, discard current data 
 

@@ -1054,10 +1054,19 @@ class monitor extends uvm_monitor;
 
     forever begin
         fork
-            ip_mon();
-            op_mon();
-        join
+            begin    /// this block will not be finished until both are done.
+                fork
+                    ip_mon();
+                    op_mon();                    
+                join
+            end
+            begin   // just in case Reset comes in randomly, we would like to get out of the block.
+                wait(intf.mon_cb.PRESETn == 0);
+            end
+        join_any
         
+        disable fork;   // kill the threads which are slow.
+
         // If Reset is Active Low, discard current data 
 
         if(!intf.mon_cb.PRESETn) begin
@@ -1092,7 +1101,7 @@ endtask: run_phase
     //   Method definitions
 
     task ip_mon();
-        @(intf.mon_cb);
+        @(intf.mon_cb);  // synchronize the task with clock so that ip_mon and op_mon run together.
         // if(intf.mon_cb.PENABLE == 1 && intf.mon_cb.PRESETn == 1 && !sampled) begin
         if(intf.mon_cb.PENABLE == 1 && !sampled) begin
             trans.PWRITE    = intf.mon_cb.PWRITE;
@@ -1109,7 +1118,7 @@ endtask: run_phase
 	if(intf.mon_cb.PENABLE == 0) sampled = 0;
     endtask
 
-    task op_mon();
+    task op_mon();    // synchronize the task with clock so that ip_mon and op_mon run together.
         @(intf.mon_cb);
         if(intf.mon_cb.PREADY == 1 && intf.mon_cb.PENABLE == 1 && intf.mon_cb.PSEL1 == 1 && intf.mon_cb.PRESETn == 1) begin
         // if(intf.mon_cb.PREADY == 1 && intf.mon_cb.PENABLE == 1 ) begin         // commenting this one out to sample signals while above condition sets in

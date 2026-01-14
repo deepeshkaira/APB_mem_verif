@@ -165,6 +165,8 @@ class transaction extends uvm_sequence_item;
     bit [31:0] PRDATA [];
     bit PSLVERR;
 
+    rand int delay;  // for stress test
+
 	// register the varibles here for using the inbuilt functions like copy, compare etc etc
     `uvm_object_utils_begin(transaction)
         `uvm_field_int(PWRITE, UVM_ALL_ON)
@@ -228,6 +230,9 @@ class transaction extends uvm_sequence_item;
     constraint sel_dist { PSEL1 dist {0:=10, 1:=90}; }
     constraint err_case_dist { error_case dist {1:=5, 0:=100}; } // Generates error test cases
 
+    constraint c_delay {
+        delay inside {[0:10]};
+    }
     // Constraint for a specific memory size, can be commented for general use
     // constraint paddr_val {
     //     !error_case -> 
@@ -910,7 +915,7 @@ class apb_race_hazard extends rnd_sequence;
 endclass
 
 ///////////////////////////////////////
-//////////// MY DRIVER /////////////
+//////////// MY DRIVER _1 /////////////
 ///////////////////////////////////////	
 
 class driver extends uvm_driver#(transaction);
@@ -1152,6 +1157,7 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
     const int ram_depth = 2**DEPTH;
     bit [31:0] ram_mem [];  // Memory for DEPTH defined
     
+    semaphore mem_lock;   // declaration of semaphore
 
     // constructor
     function new(string name, uvm_component parent);
@@ -1162,6 +1168,9 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
         for(int k=0; k<5; k++) begin
             `uvm_info("REF_MOD_DEBUG", $sformatf("Index [%0d] = %h", k, ram_mem[k]), UVM_NONE)
         end
+
+        mem_lock = new(1);    // defining just one key inthe semapghore bucket.
+        `uvm_info("REF_MOD", "Ref Model Initialized with Semaphore", UVM_NONE);
     endfunction
 
     // Function: get_ref_val()
@@ -1182,13 +1191,7 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
         else if(trans.PRESETn == 1) begin
             for(int i=0; i<trans.PADDR.size(); i++) begin
 
-                
-                /// *******************indexes for FORK_JOIN (exlusively for race condition)*****************
-                automatic int local_i = i;          // caputres 0,1,2,3 index changes as per i
-                automatic bit [31:0] local_index = trans.PADDR[i] >> 2;      /// captures current address
-                // ***************************************************************************************
-
-                word_index = local_index; /// ignoring the last 2 bit values here given from the APB MASTER (convert byte addressing to word addressing so that no memory locatuons are left behind)
+                word_index = trans.PADDR[i] >> 2; /// ignoring the last 2 bit values here given from the APB MASTER (convert byte addressing to word addressing so that no memory locatuons are left behind)
                 
 
                 // if(trans.PADDR[i] >= ram_depth) begin
@@ -1201,11 +1204,7 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
                             `uvm_info("REF_MOD_DEBUG", "Returning the value for PRDATA fr invalid memory access", UVM_NONE)                   
                             trans.PREADY = 1;
                         // adding this so that the ref_model can understand that for PWRITE = 1, read data = 0 (nothing will be read) || for PWRITE = 0 , read data = ffff_ffff (Invalid address as input hence, invalid data as output)
-                        if (trans.PWRITE == 1) begin
-                            trans.PRDATA[i] = 32'b0;      // Write = Quiet Bus
-                        end else begin
-                            trans.PRDATA[i] = 32'hffffffff; // Read = Garbage Data
-                        end
+                        trans.PRDATA[i] = (trans.PWRITE) ? 32'b0 : 32'hffffffff;
                     continue;
                 end
     
@@ -1228,28 +1227,6 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
                     // ram_mem [word_index] = trans.PWDATA[i];
                     //********************************************************************
 
-                    //********************DELAYED MEMORY UPDATE*************************
-                    // delayed update to the internal memory (RACE CONDITION CREATION)
-			        // fork join_none here-- creates a parallel schedule  to run. Mmeroy update is going to update later but the output has been generated immediately (PRDATA, PREADY, PSLVERR)
-
-                    // fork
-                    //     begin
-                    //         foreach (trans.PWDATA[local_i]) begin
-                    //             `uvm_info("REF_RACE_DEBUG", "Delayed Ref_model Memory Update start", UVM_NONE)
-                    //             `uvm_info("REF_RACE_DEBUG",$sformatf("value of word_index BEFORE #0: %0h || value of trans.PWDATA[%0d] : %0p",local_index,local_i,trans.PWDATA[local_i]),UVM_NONE)
-                    //             current_address = trans.PADDR[local_i];
-                    //             #0; // The delay that will cause the race. can use #1 to make delay more obvious but lets try with this first.
-                    //             // ram_mem[word_index] = trans.PWDATA[i]; 
-                    //             ram_mem[local_index] = trans.PWDATA[local_i]; 
-                    //             `uvm_info("REF_RACE_DEBUG",$sformatf("value of word_index AFTER #0: %0h || value of trans.PWDATA[%0d] : %0p, || ram_mem[word_index] : %0p",local_index,local_i,trans.PWDATA[local_i],ram_mem[local_index]),UVM_NONE)
-                    //             `uvm_info("REF_RACE_DEBUG", "Delayed Memory Update Complete", UVM_NONE)                                
-                    //         end
-
-                    //     end
-                    // join_none
-                    //********************************************************************
-                    /// ******************* moving the DELAYED MEMORY UPDATE BLOCK OUTSIDE OF THE LOOP***************
-                    // So that I can run it just for 1 repetition, here it is doig multiple reps (bcz of for_loop)
 
                     trans.PRDATA[i] = 32'b0;
                     trans.PREADY = 1;
@@ -1285,6 +1262,7 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
                 fork
                     begin
                         
+                        mem_lock.get(1);    // getting the key from keybucket
                         `uvm_info("REF_RACE_DEBUG", "Delayed Memory Update Sequence STARTED", UVM_NONE)
                         
                         // Loop through the CAPTURED copies
@@ -1297,10 +1275,9 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
     
                            
                             if (local_idx < ram_depth) begin
+                                                                
+                                 #0;   // can change this if required. make it #10 etc. etc.
                                 
-                                
-                                 #0; 
-                                 
                                 // just to be sure I m not outisde the reset block or if asynchronous reset arrives in midway, need to exit
                                  if (trans.PRESETn == 0) begin
                                      `uvm_info("REF_RACE_DEBUG", "Write aborted due to Reset", UVM_HIGH)
@@ -1314,6 +1291,7 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
                             end
                         end
                         `uvm_info("REF_RACE_DEBUG", "Delayed Memory Update Sequence COMPLETED", UVM_NONE)
+                        mem_lock.put(1);     /// put back the key in semaphore key bucket.
                     end
                 join_none
             end

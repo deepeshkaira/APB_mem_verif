@@ -28,7 +28,7 @@ interface APB_intf (input logic clk);
         // at certain instance of time from and to driver port.
         clocking drv_cb @(posedge clk);
             output PWRITE, PWDATA, PADDR, PENABLE, PRESETn, PSEL1;
-            input PREADY; 
+            input PREADY;
         endclocking
        
         // this defines the input for the monitor block
@@ -56,18 +56,21 @@ interface APB_intf (input logic clk);
 
         // to check whether PENABLE is asserted 1 clk after PSEL1 is asserted
         property enable_ch;
-            @(posedge clk) $rose(PSEL1) |=> PENABLE;
+            @(posedge clk) disable iff (!PRESETn)
+            $rose(PSEL1) |=> PENABLE;
         endproperty
 
         // check whether PREADY is asserted only when PSEL1 and PENABLE are high
         property check_PR_PSL_PEN;
-            @(posedge clk) PSEL1 && (PENABLE) |-> PREADY;
+            @(posedge clk) disable iff (!PRESETn)
+            PSEL1 && (PENABLE) |-> PREADY;
         endproperty
 
         // to check whether all signal are stable or not during the PENABLE assertion in the SETUP state
         // in the same clock cycle
         property stable_ch;
-            @(posedge clk) $rose(PENABLE) |-> $stable(PADDR) ##0 $stable(PWDATA) ##0 $stable(PWRITE) ##0 $stable(PSEL1);
+            @(posedge clk)  disable iff (!PRESETn)
+            $rose(PENABLE) |-> $stable(PADDR) ##0 $stable(PWDATA) ##0 $stable(PWRITE) ##0 $stable(PSEL1);
         endproperty
 
 
@@ -79,7 +82,7 @@ interface APB_intf (input logic clk);
         endsequence
 
         property enable_deassert_ch;
-            @(posedge clk)
+            @(posedge clk) disable iff (!PRESETn)
             (s1 and $rose(PREADY)) |=> $fell(PENABLE);
         endproperty
         
@@ -87,7 +90,7 @@ interface APB_intf (input logic clk);
         // Property to check whether the PENABLE is deasserted without PREADY being asserted. Also, added to skip the first check after reset.
         // since, PREADY will never be high in the past when simulation has just started, adding and checking PENABLE was 1 anytime when PREADY, makes sense
         property enable_deassert_ch2;
-            @(posedge clk)
+            @(posedge clk) disable iff (!PRESETn)
             if((PRESETn) && !$isunknown(PENABLE))
                 $fell(PENABLE) && $past(PENABLE,1,PREADY) |-> $past(PREADY) == 1;
         endproperty
@@ -405,24 +408,22 @@ class rnd_sequence extends uvm_sequence;
     //  Constructor: new
     function new(string name = "rnd_seq");
         super.new(name);
-        trans = transaction::type_id::create("trans");
-        // get number of cases here
-        if(!uvm_config_db#(int)::get(null, "seq.", "no_cases", no_of_testcases)) begin
+    endfunction
+
+    task pre_start();
+        // this is better than pre-body. it runs with "uvm_do"
+        // This ensures if we are in Agent_A, we get Agent_A's config,, similar for Agent B.
+        if(!uvm_config_db#(int)::get(m_sequencer, "", "no_cases", no_of_testcases)) begin
             `uvm_warning(get_name(), "Cant get no of testcases, Using default no of test cases = 10")
             // just in case there is an issue in recieving the number of testcases from config_db
-            no_of_testcases = 10;
+            no_of_testcases = 10; // Default
         end
-
-        // get the interface here from config db
-        if(!uvm_config_db#(virtual APB_intf)::get(null, "env.agnt.*", "intf", intf)) begin
-            `uvm_info("SEQ", "Interface handle not found", UVM_LOW)
-       end
-    endfunction
+    endtask
 
     // reset task
     virtual task reset_dut();
         `uvm_info(get_name(), " Asserting System RESET", UVM_NONE)
-        
+        trans = transaction::type_id::create("trans");
         start_item(trans);        
         trans.PRESETn = 0;    
         trans.PWRITE  = 0;    
@@ -464,6 +465,7 @@ class rnd_sequence extends uvm_sequence;
     virtual task body();
         `uvm_info("rnd_sequence","rnd_sequence block got executed",UVM_NONE);
         for (int i = 0; i < no_of_testcases-1; i++) begin
+            trans = transaction::type_id::create("trans");
             start_item(trans);
             if(!trans.randomize())
                 `uvm_fatal(get_name(), "Randomization failed");
@@ -498,6 +500,7 @@ class apb_write_seq extends rnd_sequence;
         `uvm_info(get_name(), " Starting Random Write Bursts", UVM_MEDIUM)
         
         repeat(no_of_testcases) begin
+            trans = transaction::type_id::create("trans");
             start_item(trans);
             
             // applied minimal constraints here.
@@ -542,7 +545,7 @@ class apb_read_seq extends rnd_sequence;
         `uvm_info(get_name(), " Starting Random Read Bursts", UVM_MEDIUM)
         
         repeat(no_of_testcases) begin
-
+            trans = transaction::type_id::create("trans");
             start_item(trans);
             // Randomize: force PWRITE == 0
             // PADDR is random here 
@@ -593,7 +596,7 @@ class apb_write_read_seq extends rnd_sequence;
     `uvm_info(get_name(), "Starting Directed Read After write", UVM_MEDIUM)
     
     repeat(no_of_testcases) begin
-        
+        trans = transaction::type_id::create("trans");
         
         // Reset9
         reset_dut();
@@ -658,7 +661,7 @@ class apb_random_write_read_seq extends rnd_sequence;
             `uvm_info(get_name(), "---------------------------------------", UVM_LOW)
             `uvm_info(get_name(), "seq start: random write and read sequence", UVM_LOW)
             `uvm_info(get_name(), "---------------------------------------", UVM_LOW)
-
+            trans = transaction::type_id::create("trans");
             // Reset
             reset_dut();
 
@@ -742,6 +745,7 @@ class apb_val_inval_addr extends rnd_sequence;
         `uvm_info(get_name(), " Starting valid invalid addresses write and read", UVM_MEDIUM)
 
         repeat(no_of_testcases) begin
+            trans = transaction::type_id::create("trans");
             start_item(trans);
             if(!trans.randomize() with {
                 PRESETn == 1;
@@ -802,7 +806,7 @@ class apb_noise_data_seq extends rnd_sequence;
     
     virtual task body();
         `uvm_info(get_name(), "Starting Data Noise Sequence (X/Z Injection)", UVM_MEDIUM)
-
+    trans = transaction::type_id::create("trans");
         // reset
         reset_dut();
 
@@ -868,7 +872,7 @@ class apb_race_hazard extends rnd_sequence;
 
     virtual task body();
         `uvm_info(get_name(),"Starting Race hazard: Immediate read after some write",UVM_NONE);
-
+        trans = transaction::type_id::create("trans");
         reset_dut();
 
         repeat (no_of_testcases) begin
@@ -1051,9 +1055,8 @@ class monitor extends uvm_monitor;
     //  Function: run_phase
     task run_phase(uvm_phase phase);
    
-
     forever begin
-        fork
+       fork
             begin    /// this block will not be finished until both are done.
                 fork
                     ip_mon();
@@ -1156,11 +1159,28 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
     // constructor
     function new(string name, uvm_component parent);
         super.new(name, parent);
-        ram_mem = new[ram_depth];
-        foreach(ram_mem[i]) ram_mem[i] = 32'hffffffff;       /// adding this here, because the ref_model's memory should be initialized to ffff_ffff. when the constructor runs. 
-            `uvm_info("REF_MOD","ref_model execution, depth = 32, Memory Initialized to 0xffffffff",UVM_NONE);
-        for(int k=0; k<5; k++) begin
-            `uvm_info("REF_MOD_DEBUG", $sformatf("Index [%0d] = %h", k, ram_mem[k]), UVM_NONE)
+    endfunction
+
+    virtual function void build_phase(uvm_phase phase);
+        super.build_phase(phase);
+        ram_mem = new[ram_depth]; // Allocate memory
+        `uvm_info("REF_MOD", $sformatf("Memory Allocated. Depth=%0d", ram_depth), UVM_LOW)
+    endfunction
+
+    virtual function void start_of_simulation_phase(uvm_phase phase);
+        super.start_of_simulation_phase(phase); 
+        // This function ensures memory is clean before time 0 starts
+        reset_memory(); 
+    endfunction
+
+    function void reset_memory();
+        foreach(ram_mem[i]) ram_mem[i] = 32'hffffffff;
+        
+        `uvm_info("REF_MOD", "Memory (Re)Initialized to 0xffffffff", UVM_NONE)
+        
+        // Debug Print
+        for(int k=0; k<5 && k<ram_depth; k++) begin
+             `uvm_info("REF_MOD_DEBUG", $sformatf("Index [%0d] = %h", k, ram_mem[k]), UVM_HIGH)
         end
     endfunction
 
@@ -1172,7 +1192,7 @@ class ref_model#(parameter DEPTH = 5) extends uvm_component;
     // logic [31:0] current_address;
 
         if(trans.PRESETn == 0) begin
-            foreach (ram_mem[j]) ram_mem[j] = 32'hffffffff;
+            reset_memory();
             trans.PSLVERR = 0;
             trans.PREADY = 0;
             `uvm_info("REF_MOD", "System Reset: Memory Cleared", UVM_LOW)
